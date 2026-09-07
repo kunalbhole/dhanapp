@@ -47,15 +47,50 @@ class DhanDbModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
     }
 
     @ReactMethod
-    fun getBudgets(monthKey: String, promise: Promise) {
-        runCatching { db.getBudgetsJson(monthKey) }
+    fun getBudgets(budgetDefId: Double, monthKey: String, promise: Promise) {
+        runCatching { db.getBudgetsJson(budgetDefId.toLong(), monthKey) }
             .onSuccess { promise.resolve(it) }
             .onFailure { promise.reject("dhan_db_error", it) }
     }
 
     @ReactMethod
-    fun setBudget(category: String, monthKey: String, limitAmount: Double, promise: Promise) {
-        runCatching { db.upsertBudget(category, monthKey, limitAmount) }
+    fun setBudget(budgetDefId: Double, category: String, monthKey: String, limitAmount: Double, promise: Promise) {
+        runCatching { db.upsertBudget(budgetDefId.toLong(), category, monthKey, limitAmount) }
+            .onSuccess { promise.resolve(null) }
+            .onFailure { promise.reject("dhan_db_error", it) }
+    }
+
+    @ReactMethod
+    fun clearBudgetCategories(budgetDefId: Double, monthKey: String, promise: Promise) {
+        runCatching { db.clearBudgetCategories(budgetDefId.toLong(), monthKey) }
+            .onSuccess { promise.resolve(null) }
+            .onFailure { promise.reject("dhan_db_error", it) }
+    }
+
+    @ReactMethod
+    fun getBudgetDefs(promise: Promise) {
+        runCatching { db.getBudgetDefsJson() }
+            .onSuccess { promise.resolve(it) }
+            .onFailure { promise.reject("dhan_db_error", it) }
+    }
+
+    @ReactMethod
+    fun createBudgetDef(name: String, type: String, frameworkKey: String, customFrameworkJson: String?, promise: Promise) {
+        runCatching { db.insertBudgetDef(name, type, frameworkKey, customFrameworkJson) }
+            .onSuccess { promise.resolve(it.toDouble()) }
+            .onFailure { promise.reject("dhan_db_error", it) }
+    }
+
+    @ReactMethod
+    fun updateBudgetDefFramework(id: Double, frameworkKey: String, customFrameworkJson: String?, promise: Promise) {
+        runCatching { db.updateBudgetDefFramework(id.toLong(), frameworkKey, customFrameworkJson) }
+            .onSuccess { promise.resolve(null) }
+            .onFailure { promise.reject("dhan_db_error", it) }
+    }
+
+    @ReactMethod
+    fun deleteBudgetDef(id: Double, promise: Promise) {
+        runCatching { db.deleteBudgetDef(id.toLong()) }
             .onSuccess { promise.resolve(null) }
             .onFailure { promise.reject("dhan_db_error", it) }
     }

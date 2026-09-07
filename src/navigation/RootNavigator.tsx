@@ -17,6 +17,9 @@ import { TxnDetailScreen } from '../screens/TxnDetailScreen';
 import { AddTransactionScreen } from '../screens/AddTransactionScreen';
 import { AddBillScreen } from '../screens/AddBillScreen';
 import { BackupSettingsScreen } from '../screens/BackupSettingsScreen';
+import { EditBudgetScreen } from '../screens/EditBudgetScreen';
+import { CreateBudgetScreen } from '../screens/CreateBudgetScreen';
+import { CustomFrameworkBuilderScreen } from '../screens/CustomFrameworkBuilderScreen';
 
 export type RootStackParamList = {
   Welcome: undefined;
@@ -25,6 +28,11 @@ export type RootStackParamList = {
   AddTransaction: { defaultIsIncome?: boolean } | undefined;
   AddBill: undefined;
   BackupSettings: undefined;
+  EditBudget: { budgetDefId: number };
+  CreateBudget: undefined;
+  CustomFrameworkBuilder:
+    | { mode: 'create'; pendingName: string; pendingTotal: number }
+    | { mode: 'edit'; budgetDefId: number; existingCustomJson: string | null; currentTotal: number };
 };
 
 export type MainTabParamList = {
@@ -97,6 +105,9 @@ export function RootNavigator() {
         <Stack.Screen name="AddTransaction" component={AddTransactionScreen} options={{ title: 'Add transaction', presentation: 'modal' }} />
         <Stack.Screen name="AddBill" component={AddBillScreen} options={{ title: 'Add bill', presentation: 'modal' }} />
         <Stack.Screen name="BackupSettings" component={BackupSettingsScreen} options={{ title: 'Backup' }} />
+        <Stack.Screen name="EditBudget" component={EditBudgetScreen} options={{ title: 'Edit budget' }} />
+        <Stack.Screen name="CreateBudget" component={CreateBudgetScreen} options={{ title: 'New budget', presentation: 'modal' }} />
+        <Stack.Screen name="CustomFrameworkBuilder" component={CustomFrameworkBuilderScreen} options={{ title: 'Custom framework' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

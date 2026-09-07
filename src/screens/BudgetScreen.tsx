@@ -1,45 +1,47 @@
 import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { DhanText as Text } from '../components/DhanText';
-import { useFocusEffect } from '@react-navigation/native';
-import { colors, CATEGORIES, CategoryKey, categoryFromKey } from '../theme/colors';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { DotsThreeVerticalIcon } from 'phosphor-react-native';
+import { colors, CATEGORIES, categoryFromKey } from '../theme/colors';
 import { type } from '../theme/type';
-import { db, Budget, Transaction } from '../native/DhanDb';
+import { db, Budget, BudgetDef } from '../native/DhanDb';
+import { Transaction } from '../native/DhanDb';
 import { formatINR, monthKey, monthRange } from '../utils/format';
 import { DhanCard } from '../components/Card';
 import { StatusPill } from '../components/Chips';
-import { DhanChip } from '../components/Chips';
 import { CategoryIcon } from '../components/CategoryIcon';
 import { DhanButton } from '../components/Button';
+import { resolveFramework, FrameworkBucket, TOTAL_BUDGET_CATEGORY_KEY } from '../data/frameworks';
+import { RootStackParamList } from '../navigation/RootNavigator';
 
-const EDITABLE_CATEGORIES = (Object.keys(CATEGORIES) as CategoryKey[]).filter((c) => c !== 'income');
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
-/** Reserved "category" key for the overall monthly cap, stored in the same budgets table
- *  as per-category caps so no native/schema change is needed. Never rendered as a category. */
-const TOTAL_BUDGET_KEY = '__total__';
-
+/**
+ * "Your budgets" — Personal plus any Project budgets, as expandable accordion cards
+ * (decided over tabs or a dropdown). Each card shows a read-only summary + framework
+ * breakdown; all editing (total, framework, per-category allocations) lives in
+ * EditBudgetScreen, reached via the card's 3-dot menu — never inline here.
+ */
 export function BudgetScreen() {
-  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const navigation = useNavigation<Nav>();
+  const [budgetDefs, setBudgetDefs] = useState<BudgetDef[]>([]);
+  const [budgetsByDefId, setBudgetsByDefId] = useState<Map<number, Budget[]>>(new Map());
   const [txns, setTxns] = useState<Transaction[]>([]);
-  const [pickCategory, setPickCategory] = useState<CategoryKey>('food');
-  const [amountText, setAmountText] = useState('');
-  const [totalText, setTotalText] = useState('');
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const load = useCallback(() => {
-    Promise.all([db.getBudgets(monthKey()), db.getTransactions()]).then(([b, t]) => {
-      setBudgets(b);
+    Promise.all([db.getBudgetDefs(), db.getTransactions()]).then(async ([defs, t]) => {
+      setBudgetDefs(defs);
       setTxns(t);
-      const totalRow = b.find((x) => x.category === TOTAL_BUDGET_KEY);
-      setTotalText(totalRow ? String(totalRow.limitAmount) : '');
+      const key = monthKey();
+      const entries = await Promise.all(defs.map(async (d): Promise<[number, Budget[]]> => [d.id, await db.getBudgets(d.id, key)]));
+      setBudgetsByDefId(new Map(entries));
     });
   }, []);
 
   useFocusEffect(load);
-
-  const categoryBudgets = budgets.filter((b) => b.category !== TOTAL_BUDGET_KEY);
-  const totalOverride = budgets.find((b) => b.category === TOTAL_BUDGET_KEY)?.limitAmount;
-  const categorySum = categoryBudgets.reduce((s, b) => s + b.limitAmount, 0);
-  const totalCap = totalOverride ?? categorySum;
 
   const [monthStart, monthEnd] = monthRange();
   const spendByCategory = new Map<string, number>();
@@ -48,123 +50,148 @@ export function BudgetScreen() {
     spendByCategory.set(t.category, (spendByCategory.get(t.category) ?? 0) - t.amount);
   }
 
-  const totalSpent = categoryBudgets.reduce((s, b) => s + (spendByCategory.get(b.category) ?? 0), 0);
-  const pct = totalCap > 0 ? Math.round((totalSpent / totalCap) * 100) : 0;
-
-  const saveBudget = async () => {
-    const amount = Number(amountText);
-    if (!amount || amount <= 0) return;
-    await db.setBudget(pickCategory, monthKey(), amount);
-    setAmountText('');
-    load();
-  };
-
-  const saveTotalBudget = async () => {
-    const amount = Number(totalText);
-    if (!amount || amount <= 0) return;
-    if (categorySum > amount) {
-      Alert.alert(
-        'Allocations exceed this total',
-        `Your category caps add up to ${formatINR(categorySum)}, more than the ${formatINR(amount)} total you're setting. Category caps won't change automatically — you may want to adjust them.`,
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Set total anyway', onPress: () => commitTotalBudget(amount) },
-        ],
-      );
-      return;
+  const openMenu = (def: BudgetDef) => {
+    const buttons: { text: string; onPress?: () => void; style?: 'destructive' | 'cancel' }[] = [
+      { text: 'Edit', onPress: () => navigation.navigate('EditBudget', { budgetDefId: def.id }) },
+    ];
+    if (def.type !== 'PERSONAL') {
+      buttons.push({
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () =>
+          Alert.alert('Delete this budget?', `"${def.name}" and its allocations will be removed. Transactions aren't affected.`, [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Delete',
+              style: 'destructive',
+              onPress: async () => {
+                await db.deleteBudgetDef(def.id);
+                load();
+              },
+            },
+          ]),
+      });
     }
-    await commitTotalBudget(amount);
-  };
-
-  const commitTotalBudget = async (amount: number) => {
-    await db.setBudget(TOTAL_BUDGET_KEY, monthKey(), amount);
-    load();
+    buttons.push({ text: 'Cancel', style: 'cancel' });
+    Alert.alert(def.name, undefined, buttons);
   };
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Budget</Text>
+      <Text style={styles.sectionLabel}>YOUR BUDGETS</Text>
 
-      <DhanCard style={{ marginBottom: 14 }}>
-        {categoryBudgets.length === 0 && !totalOverride ? (
-          <Text style={styles.empty}>No budget set for this month yet. Add your first category cap below.</Text>
-        ) : (
-          <>
-            <Text style={styles.spentAmount}>{formatINR(totalSpent)} <Text style={styles.of}>of {formatINR(totalCap)}</Text></Text>
-            <View style={styles.barTrack}>
-              <View style={[styles.barFill, { width: `${Math.min(100, pct)}%`, backgroundColor: pct > 100 ? colors.expense : colors.navy }]} />
-            </View>
-          </>
-        )}
-      </DhanCard>
+      {budgetDefs.map((def) => {
+        const framework = resolveFramework(def.frameworkKey, def.customFrameworkJson);
+        const allRows = budgetsByDefId.get(def.id) ?? [];
+        const categoryRows = allRows.filter((b) => b.category !== TOTAL_BUDGET_CATEGORY_KEY);
+        const totalOverride = allRows.find((b) => b.category === TOTAL_BUDGET_CATEGORY_KEY)?.limitAmount;
+        const categorySum = categoryRows.reduce((s, b) => s + b.limitAmount, 0);
+        const totalCap = totalOverride ?? categorySum;
+        const totalSpent = categoryRows.reduce((s, b) => s + (spendByCategory.get(b.category) ?? 0), 0);
+        const pct = totalCap > 0 ? Math.round((totalSpent / totalCap) * 100) : 0;
+        const expanded = expandedId === def.id;
 
-      <Text style={styles.sectionLabel}>TOTAL BUDGET</Text>
-      <DhanCard style={{ marginBottom: 18 }}>
-        <Text style={styles.totalHint}>
-          Set an overall monthly cap directly. This won't change your category allocations below.
-        </Text>
-        <View style={styles.amountRow}>
-          <Text style={styles.rupee}>₹</Text>
-          <TextInput
-            value={totalText}
-            onChangeText={setTotalText}
-            placeholder="Overall monthly budget"
-            placeholderTextColor={colors.fg3}
-            keyboardType="numeric"
-            style={styles.amountInput}
-          />
-        </View>
-        <DhanButton text="Save total budget" onPress={saveTotalBudget} full />
-      </DhanCard>
-
-      <Text style={styles.sectionLabel}>ADD / UPDATE A CAP</Text>
-      <DhanCard style={{ marginBottom: 18 }}>
-        <View style={styles.chipWrap}>
-          {EDITABLE_CATEGORIES.map((c) => (
-            <DhanChip key={c} label={CATEGORIES[c].name} active={pickCategory === c} onPress={() => setPickCategory(c)} />
-          ))}
-        </View>
-        <View style={styles.amountRow}>
-          <Text style={styles.rupee}>₹</Text>
-          <TextInput
-            value={amountText}
-            onChangeText={setAmountText}
-            placeholder="Monthly cap"
-            placeholderTextColor={colors.fg3}
-            keyboardType="numeric"
-            style={styles.amountInput}
-          />
-        </View>
-        <DhanButton text="Save cap" onPress={saveBudget} full />
-      </DhanCard>
-
-      {categoryBudgets.map((b) => {
-        const cat = categoryFromKey(b.category);
-        const meta = CATEGORIES[cat];
-        const spent = spendByCategory.get(b.category) ?? 0;
-        const pctCat = b.limitAmount > 0 ? Math.round((spent / b.limitAmount) * 100) : 0;
-        const over = spent > b.limitAmount;
         return (
-          <DhanCard key={b.id} style={{ marginBottom: 10 }}>
-            <View style={styles.catRow}>
-              <View style={styles.catLeft}>
-                <CategoryIcon category={cat} size={32} tint />
-                <View>
-                  <Text style={styles.catName}>{meta.name}</Text>
-                  <Text style={styles.catSub}>{formatINR(spent)} of {formatINR(b.limitAmount)}</Text>
+          <DhanCard key={def.id} style={styles.budgetCard} onPress={() => setExpandedId(expanded ? null : def.id)}>
+            <View style={styles.cardHeader}>
+              <View style={{ flex: 1 }}>
+                <View style={styles.nameRow}>
+                  <Text style={styles.budgetName}>{def.name}</Text>
+                  <StatusPill tone="neutral">{framework.name}</StatusPill>
                 </View>
+                {categoryRows.length === 0 && !totalOverride ? (
+                  <Text style={styles.empty}>No allocations yet — tap ⋮ then Edit to set a total budget.</Text>
+                ) : (
+                  <>
+                    <Text style={styles.spentAmount}>
+                      {formatINR(totalSpent)} <Text style={styles.of}>of {formatINR(totalCap)}</Text>
+                    </Text>
+                    <View style={styles.barTrack}>
+                      <View style={[styles.barFill, { width: `${Math.min(100, pct)}%`, backgroundColor: pct > 100 ? colors.expense : colors.navy }]} />
+                    </View>
+                  </>
+                )}
               </View>
-              <StatusPill tone={over ? 'expense' : pctCat >= 80 ? 'warning' : 'income'}>
-                {over ? 'Overspent' : pctCat >= 80 ? 'Warning' : 'On track'}
-              </StatusPill>
+              <Pressable hitSlop={12} onPress={() => openMenu(def)} style={styles.menuButton}>
+                <DotsThreeVerticalIcon size={20} color={colors.fg3} weight="bold" />
+              </Pressable>
             </View>
-            <View style={[styles.barTrack, { height: 6, marginTop: 10 }]}>
-              <View style={[styles.barFill, { width: `${Math.min(100, pctCat)}%`, backgroundColor: over ? colors.expense : meta.color }]} />
-            </View>
+
+            {expanded && (
+              <View style={styles.bucketsWrap}>
+                {framework.buckets.map((bucket) => (
+                  <BucketBreakdown key={bucket.key} bucket={bucket} totalCap={totalCap} categoryRows={categoryRows} spendByCategory={spendByCategory} />
+                ))}
+              </View>
+            )}
           </DhanCard>
         );
       })}
+
+      <DhanButton text="+ Create new budget" variant="secondary" full onPress={() => navigation.navigate('CreateBudget')} style={{ marginTop: 8 }} />
     </ScrollView>
+  );
+}
+
+function BucketBreakdown({
+  bucket,
+  totalCap,
+  categoryRows,
+  spendByCategory,
+}: {
+  bucket: FrameworkBucket;
+  totalCap: number;
+  categoryRows: Budget[];
+  spendByCategory: Map<string, number>;
+}) {
+  const categoryCapByKey = new Map(categoryRows.map((b) => [b.category, b.limitAmount]));
+  const hasCategories = bucket.categories.length > 0;
+  const bucketAmount = hasCategories
+    ? bucket.categories.reduce((s, c) => s + (categoryCapByKey.get(c) ?? 0), 0)
+    : (totalCap * bucket.percent) / 100;
+
+  return (
+    <View style={styles.bucket}>
+      <View style={styles.bucketHeaderRow}>
+        <Text style={styles.bucketName}>{bucket.name}</Text>
+        <Text style={styles.bucketAmount}>
+          {formatINR(bucketAmount)} <Text style={styles.bucketPercent}>({bucket.percent}%)</Text>
+        </Text>
+      </View>
+      {hasCategories &&
+        bucket.categories.map((c) => {
+          const cat = categoryFromKey(c);
+          const meta = CATEGORIES[cat];
+          const cap = categoryCapByKey.get(c) ?? 0;
+          const spent = spendByCategory.get(c) ?? 0;
+          const pctCat = cap > 0 ? Math.round((spent / cap) * 100) : 0;
+          const over = cap > 0 && spent > cap;
+          return (
+            <View key={c} style={styles.catRow}>
+              <View style={styles.catRowTop}>
+                <View style={styles.catLeft}>
+                  <CategoryIcon category={cat} size={28} tint />
+                  <View>
+                    <Text style={styles.catName}>{meta.name}</Text>
+                    <Text style={styles.catSub}>
+                      {formatINR(spent)} of {formatINR(cap)}
+                    </Text>
+                  </View>
+                </View>
+                <StatusPill tone={over ? 'expense' : pctCat >= 80 ? 'warning' : 'income'}>
+                  {over ? 'Overspent' : pctCat >= 80 ? 'Warning' : 'On track'}
+                </StatusPill>
+              </View>
+              {/* Distinct color per category (same palette as everywhere else), not a
+                  single flat tone — falls back to the expense color only when over cap. */}
+              <View style={[styles.barTrack, { height: 5, marginTop: 6 }]}>
+                <View style={[styles.barFill, { width: `${Math.min(100, pctCat)}%`, backgroundColor: over ? colors.expense : meta.color }]} />
+              </View>
+            </View>
+          );
+        })}
+    </View>
   );
 }
 
@@ -172,22 +199,26 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.appBg },
   content: { padding: 16, paddingBottom: 40 },
   title: { ...type.h1, color: colors.fg1, marginBottom: 14 },
-  empty: { color: colors.fg3, fontSize: 13, lineHeight: 19 },
-  spentAmount: { fontSize: 24, fontWeight: '700', color: colors.fg1 },
-  of: { fontSize: 14, fontWeight: '400', color: colors.fg3 },
-  barTrack: { height: 8, backgroundColor: colors.bgSurface, borderRadius: 999, overflow: 'hidden', marginTop: 12 },
+  sectionLabel: { ...type.label, color: colors.fg3, marginBottom: 8, marginLeft: 4 },
+  empty: { color: colors.fg3, fontSize: 13, lineHeight: 19, marginTop: 4 },
+  budgetCard: { marginBottom: 10 },
+  cardHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
+  budgetName: { fontSize: 16, fontWeight: '700', color: colors.fg1 },
+  menuButton: { padding: 4, marginTop: -4, marginRight: -4 },
+  spentAmount: { fontSize: 22, fontWeight: '700', color: colors.fg1 },
+  of: { fontSize: 13, fontWeight: '400', color: colors.fg3 },
+  barTrack: { height: 8, backgroundColor: colors.bgSurface, borderRadius: 999, overflow: 'hidden', marginTop: 10 },
   barFill: { height: '100%', borderRadius: 999 },
-  catRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  bucketsWrap: { marginTop: 16, borderTopWidth: 1, borderTopColor: colors.borderSubtle, paddingTop: 14, gap: 16 },
+  bucket: { gap: 10 },
+  bucketHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  bucketName: { fontSize: 13, fontWeight: '700', color: colors.fg2, textTransform: 'uppercase', letterSpacing: 0.4 },
+  bucketAmount: { fontSize: 13, fontWeight: '700', color: colors.fg1 },
+  bucketPercent: { fontWeight: '400', color: colors.fg3 },
+  catRow: { marginTop: 2 },
+  catRowTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   catLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   catName: { fontSize: 14, fontWeight: '700', color: colors.fg1 },
   catSub: { fontSize: 11, color: colors.fg3, marginTop: 1 },
-  sectionLabel: { ...type.label, color: colors.fg3, marginBottom: 8, marginLeft: 4 },
-  totalHint: { fontSize: 12, color: colors.fg3, marginBottom: 12, lineHeight: 17 },
-  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
-  amountRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, height: 48, borderWidth: 1,
-    borderColor: colors.borderDefault, borderRadius: 8, paddingHorizontal: 12, marginBottom: 14, backgroundColor: '#fff',
-  },
-  rupee: { color: colors.fg2, fontWeight: '600' },
-  amountInput: { flex: 1, fontSize: 15, color: colors.fg1, fontFamily: 'Poppins-Regular' },
 });

@@ -36,12 +36,25 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
         )
         db.execSQL(
             """
+            CREATE TABLE budget_defs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                frameworkKey TEXT NOT NULL,
+                customFrameworkJson TEXT
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("INSERT INTO budget_defs (id, name, type, frameworkKey) VALUES (1, 'Personal', 'PERSONAL', '50-30-20')")
+        db.execSQL(
+            """
             CREATE TABLE budgets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                budgetDefId INTEGER NOT NULL DEFAULT 1,
                 category TEXT NOT NULL,
                 monthKey TEXT NOT NULL,
                 limitAmount REAL NOT NULL,
-                UNIQUE(category, monthKey)
+                UNIQUE(budgetDefId, category, monthKey)
             )
             """.trimIndent(),
         )
@@ -105,7 +118,45 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // No prior versions shipped yet.
+        if (oldVersion < 2) {
+            // Introduces multiple named budgets (Personal + Project) each following a
+            // budgeting framework, instead of one flat set of per-category caps. Every
+            // budget row that already existed belonged to the single implicit budget, so
+            // it's migrated onto a newly-seeded "Personal" budget_defs row (id 1) — no data
+            // is lost, including the "__total__" sentinel row used for the total-budget
+            // override, which carries over unchanged under the same reserved category key.
+            db.execSQL(
+                """
+                CREATE TABLE budget_defs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    frameworkKey TEXT NOT NULL,
+                    customFrameworkJson TEXT
+                )
+                """.trimIndent(),
+            )
+            db.execSQL("INSERT INTO budget_defs (id, name, type, frameworkKey) VALUES (1, 'Personal', 'PERSONAL', '50-30-20')")
+
+            db.execSQL("ALTER TABLE budgets RENAME TO budgets_old")
+            db.execSQL(
+                """
+                CREATE TABLE budgets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    budgetDefId INTEGER NOT NULL DEFAULT 1,
+                    category TEXT NOT NULL,
+                    monthKey TEXT NOT NULL,
+                    limitAmount REAL NOT NULL,
+                    UNIQUE(budgetDefId, category, monthKey)
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                "INSERT INTO budgets (id, budgetDefId, category, monthKey, limitAmount) " +
+                    "SELECT id, 1, category, monthKey, limitAmount FROM budgets_old",
+            )
+            db.execSQL("DROP TABLE budgets_old")
+        }
     }
 
     fun insertTransaction(merchant: String, note: String?, amount: Double, category: String, timestampMillis: Long, source: String, sourceApp: String?, rawText: String?, accountHint: String?): Long {
@@ -204,16 +255,19 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
         return arr.toString()
     }
 
-    fun upsertBudget(category: String, monthKey: String, limitAmount: Double) {
+    fun upsertBudget(budgetDefId: Long, category: String, monthKey: String, limitAmount: Double) {
         writableDatabase.execSQL(
-            "INSERT INTO budgets (category, monthKey, limitAmount) VALUES (?, ?, ?) " +
-                "ON CONFLICT(category, monthKey) DO UPDATE SET limitAmount = excluded.limitAmount",
-            arrayOf(category, monthKey, limitAmount),
+            "INSERT INTO budgets (budgetDefId, category, monthKey, limitAmount) VALUES (?, ?, ?, ?) " +
+                "ON CONFLICT(budgetDefId, category, monthKey) DO UPDATE SET limitAmount = excluded.limitAmount",
+            arrayOf(budgetDefId.toString(), category, monthKey, limitAmount),
         )
     }
 
-    fun getBudgetsJson(monthKey: String): String {
-        val cursor = readableDatabase.rawQuery("SELECT * FROM budgets WHERE monthKey = ?", arrayOf(monthKey))
+    fun getBudgetsJson(budgetDefId: Long, monthKey: String): String {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT * FROM budgets WHERE budgetDefId = ? AND monthKey = ?",
+            arrayOf(budgetDefId.toString(), monthKey),
+        )
         val arr = JSONArray()
         cursor.use {
             while (it.moveToNext()) {
@@ -221,6 +275,66 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
             }
         }
         return arr.toString()
+    }
+
+    /** Clears a budget's per-category allocations for one month — used when switching
+     *  frameworks, since the old framework's category caps don't necessarily make sense
+     *  under the new one. Deliberately keeps the "__total__" sentinel row (the overall
+     *  budget amount survives a framework change; only its breakdown resets) — the literal
+     *  must match the reserved key on the JS side (src/screens/BudgetScreen.tsx). */
+    fun clearBudgetCategories(budgetDefId: Long, monthKey: String) {
+        writableDatabase.delete(
+            "budgets",
+            "budgetDefId = ? AND monthKey = ? AND category != '__total__'",
+            arrayOf(budgetDefId.toString(), monthKey),
+        )
+    }
+
+    fun getBudgetDefsJson(): String {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT * FROM budget_defs ORDER BY CASE WHEN type = 'PERSONAL' THEN 0 ELSE 1 END, id ASC",
+            null,
+        )
+        val arr = JSONArray()
+        cursor.use {
+            while (it.moveToNext()) {
+                arr.put(rowToJson(it))
+            }
+        }
+        return arr.toString()
+    }
+
+    fun insertBudgetDef(name: String, type: String, frameworkKey: String, customFrameworkJson: String?): Long {
+        val values = ContentValues().apply {
+            put("name", name)
+            put("type", type)
+            put("frameworkKey", frameworkKey)
+            put("customFrameworkJson", customFrameworkJson)
+        }
+        return writableDatabase.insert("budget_defs", null, values)
+    }
+
+    fun updateBudgetDefFramework(id: Long, frameworkKey: String, customFrameworkJson: String?) {
+        val values = ContentValues().apply {
+            put("frameworkKey", frameworkKey)
+            put("customFrameworkJson", customFrameworkJson)
+        }
+        writableDatabase.update("budget_defs", values, "id = ?", arrayOf(id.toString()))
+    }
+
+    /** No-op (rather than an error) for the Personal budget (always id 1) — the UI never
+     *  offers Delete for it, but this is a second, native-side backstop against losing it. */
+    fun deleteBudgetDef(id: Long) {
+        if (id == 1L) return
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("budgets", "budgetDefId = ?", arrayOf(id.toString()))
+            db.delete("budget_defs", "id = ?", arrayOf(id.toString()))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun insertBill(name: String, amount: Double, dueDateMillis: Long, status: String, repeatMonthly: Boolean, category: String): Long {
@@ -335,6 +449,7 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
     fun exportAllJson(): String {
         val out = JSONObject()
         out.put("transactions", JSONArray(getTransactionsJson()))
+        out.put("budgetDefs", JSONArray(getBudgetDefsJson()))
         out.put("budgets", JSONArray(getAllBudgetsJson()))
         out.put("bills", JSONArray(getBillsJson()))
         out.put("goals", JSONArray(getGoalsJson()))
@@ -375,10 +490,34 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
                 restoredTxnCount++
             }
 
+            // budget_defs before budgets, since budgets.budgetDefId references it. Personal
+            // (id 1) already exists on any DB reaching this point (seeded by onCreate/
+            // onUpgrade) so it's never re-inserted — only remapped, on the safe assumption
+            // that Personal is always id 1 on both ends. Project budgets get fresh ids.
+            val budgetDefIdRemap = HashMap<Long, Long>()
+            val budgetDefs = obj.optJSONArray("budgetDefs") ?: JSONArray()
+            for (i in 0 until budgetDefs.length()) {
+                val bd = budgetDefs.getJSONObject(i)
+                val oldId = bd.getLong("id")
+                if (bd.getString("type") == "PERSONAL") {
+                    budgetDefIdRemap[oldId] = 1L
+                } else {
+                    val newId = insertBudgetDef(
+                        bd.getString("name"),
+                        bd.getString("type"),
+                        bd.getString("frameworkKey"),
+                        bd.optStringOrNull("customFrameworkJson"),
+                    )
+                    budgetDefIdRemap[oldId] = newId
+                }
+            }
+
             val budgets = obj.optJSONArray("budgets") ?: JSONArray()
             for (i in 0 until budgets.length()) {
                 val b = budgets.getJSONObject(i)
-                upsertBudget(b.getString("category"), b.getString("monthKey"), b.getDouble("limitAmount"))
+                val oldBudgetDefId = if (b.has("budgetDefId")) b.getLong("budgetDefId") else 1L
+                val budgetDefId = budgetDefIdRemap[oldBudgetDefId] ?: 1L
+                upsertBudget(budgetDefId, b.getString("category"), b.getString("monthKey"), b.getDouble("limitAmount"))
             }
 
             val bills = obj.optJSONArray("bills") ?: JSONArray()
@@ -442,7 +581,7 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
 
     companion object {
         private const val DB_NAME = "dhan.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
 
         @Volatile private var instance: DhanDb? = null
 
