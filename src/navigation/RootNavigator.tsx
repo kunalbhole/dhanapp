@@ -15,6 +15,7 @@ import { SettingsScreen } from '../screens/SettingsScreen';
 import { TxnDetailScreen } from '../screens/TxnDetailScreen';
 import { AddTransactionScreen } from '../screens/AddTransactionScreen';
 import { AddBillScreen } from '../screens/AddBillScreen';
+import { BackupSettingsScreen } from '../screens/BackupSettingsScreen';
 
 export type RootStackParamList = {
   Welcome: undefined;
@@ -22,6 +23,7 @@ export type RootStackParamList = {
   TxnDetail: { id: number };
   AddTransaction: { defaultIsIncome?: boolean } | undefined;
   AddBill: undefined;
+  BackupSettings: undefined;
 };
 
 export type MainTabParamList = {
@@ -90,6 +92,7 @@ export function RootNavigator() {
         <Stack.Screen name="TxnDetail" component={TxnDetailScreen} options={{ title: 'Transaction' }} />
         <Stack.Screen name="AddTransaction" component={AddTransactionScreen} options={{ title: 'Add transaction', presentation: 'modal' }} />
         <Stack.Screen name="AddBill" component={AddBillScreen} options={{ title: 'Add bill', presentation: 'modal' }} />
+        <Stack.Screen name="BackupSettings" component={BackupSettingsScreen} options={{ title: 'Backup' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -241,6 +241,147 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
         return arr.toString()
     }
 
+    fun insertFriend(name: String, balance: Double): Long {
+        val values = ContentValues().apply {
+            put("name", name)
+            put("balance", balance)
+        }
+        return writableDatabase.insert("friends", null, values)
+    }
+
+    fun getDebtEntriesJson(): String {
+        val cursor = readableDatabase.rawQuery("SELECT * FROM debt_entries ORDER BY timestampMillis ASC", null)
+        val arr = JSONArray()
+        cursor.use {
+            while (it.moveToNext()) {
+                arr.put(rowToJson(it))
+            }
+        }
+        return arr.toString()
+    }
+
+    fun insertDebtEntry(friendId: Long, description: String, amount: Double, timestampMillis: Long): Long {
+        val values = ContentValues().apply {
+            put("friendId", friendId)
+            put("description", description)
+            put("amount", amount)
+            put("timestampMillis", timestampMillis)
+        }
+        return writableDatabase.insert("debt_entries", null, values)
+    }
+
+    /** All budgets across every month, for backup export (getBudgetsJson is scoped to one
+     *  monthKey for the Budget screen's own use). */
+    fun getAllBudgetsJson(): String {
+        val cursor = readableDatabase.rawQuery("SELECT * FROM budgets", null)
+        val arr = JSONArray()
+        cursor.use {
+            while (it.moveToNext()) {
+                arr.put(rowToJson(it))
+            }
+        }
+        return arr.toString()
+    }
+
+    /**
+     * Full local-data snapshot for Google Drive backup. Deliberately excludes
+     * capture_events (a re-derivable activity log, not user financial data) and anything
+     * that only lives in JS-side AsyncStorage (e.g. display name) — see BackupRepository.
+     */
+    fun exportAllJson(): String {
+        val out = JSONObject()
+        out.put("transactions", JSONArray(getTransactionsJson()))
+        out.put("budgets", JSONArray(getAllBudgetsJson()))
+        out.put("bills", JSONArray(getBillsJson()))
+        out.put("goals", JSONArray(getGoalsJson()))
+        out.put("friends", JSONArray(getFriendsJson()))
+        out.put("debtEntries", JSONArray(getDebtEntriesJson()))
+        return out.toString()
+    }
+
+    /**
+     * Populates an (assumed empty) local database from a backup produced by [exportAllJson].
+     * Row "id" fields are ignored on purpose — SQLite assigns fresh autoincrement ids — except
+     * debtEntries.friendId, which is remapped from the backup's old friend id to the newly
+     * inserted friend's id so debts still point at the right person. Runs as one transaction
+     * so a failure partway through leaves the database untouched rather than half-restored.
+     * Returns the number of transactions restored (used by onboarding to decide whether the
+     * historical SMS scan should still run).
+     */
+    fun importAllJson(json: String): Int {
+        val obj = JSONObject(json)
+        val db = writableDatabase
+        var restoredTxnCount = 0
+        db.beginTransaction()
+        try {
+            val transactions = obj.optJSONArray("transactions") ?: JSONArray()
+            for (i in 0 until transactions.length()) {
+                val t = transactions.getJSONObject(i)
+                insertTransaction(
+                    merchant = t.getString("merchant"),
+                    note = t.optStringOrNull("note"),
+                    amount = t.getDouble("amount"),
+                    category = t.getString("category"),
+                    timestampMillis = t.getLong("timestampMillis"),
+                    source = t.getString("source"),
+                    sourceApp = t.optStringOrNull("sourceApp"),
+                    rawText = t.optStringOrNull("rawText"),
+                    accountHint = t.optStringOrNull("accountHint"),
+                )
+                restoredTxnCount++
+            }
+
+            val budgets = obj.optJSONArray("budgets") ?: JSONArray()
+            for (i in 0 until budgets.length()) {
+                val b = budgets.getJSONObject(i)
+                upsertBudget(b.getString("category"), b.getString("monthKey"), b.getDouble("limitAmount"))
+            }
+
+            val bills = obj.optJSONArray("bills") ?: JSONArray()
+            for (i in 0 until bills.length()) {
+                val b = bills.getJSONObject(i)
+                insertBill(
+                    name = b.getString("name"),
+                    amount = b.getDouble("amount"),
+                    dueDateMillis = b.getLong("dueDateMillis"),
+                    status = b.getString("status"),
+                    repeatMonthly = b.getInt("repeatMonthly") != 0,
+                    category = b.getString("category"),
+                )
+            }
+
+            val goals = obj.optJSONArray("goals") ?: JSONArray()
+            for (i in 0 until goals.length()) {
+                val g = goals.getJSONObject(i)
+                insertGoal(g.getString("name"), g.getDouble("targetAmount"), g.getDouble("savedAmount"))
+            }
+
+            val friends = obj.optJSONArray("friends") ?: JSONArray()
+            val friendIdRemap = HashMap<Long, Long>()
+            for (i in 0 until friends.length()) {
+                val f = friends.getJSONObject(i)
+                val newId = insertFriend(f.getString("name"), f.getDouble("balance"))
+                friendIdRemap[f.getLong("id")] = newId
+            }
+
+            val debtEntries = obj.optJSONArray("debtEntries") ?: JSONArray()
+            for (i in 0 until debtEntries.length()) {
+                val d = debtEntries.getJSONObject(i)
+                val oldFriendId = d.getLong("friendId")
+                val newFriendId = friendIdRemap[oldFriendId] ?: continue
+                insertDebtEntry(newFriendId, d.getString("description"), d.getDouble("amount"), d.getLong("timestampMillis"))
+            }
+
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return restoredTxnCount
+    }
+
+    private fun JSONObject.optStringOrNull(key: String): String? =
+        if (isNull(key) || !has(key)) null else getString(key)
+
     private fun rowToJson(cursor: android.database.Cursor): JSONObject {
         val obj = JSONObject()
         for (i in 0 until cursor.columnCount) {

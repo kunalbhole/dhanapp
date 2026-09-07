@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useFocusEffect, useNavigation, CommonActions } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
@@ -7,9 +7,10 @@ import { type } from '../theme/type';
 import { db, CaptureEvent } from '../native/DhanDb';
 import { permissions } from '../native/DhanPermissions';
 import { userPrefs } from '../native/UserPrefs';
+import { entitlement, EntitlementStatus } from '../native/Entitlement';
 import { DhanCard } from '../components/Card';
 import { DhanButton } from '../components/Button';
-import { timeLabel, dayGroupLabel } from '../utils/format';
+import { dateLabel, timeLabel, dayGroupLabel } from '../utils/format';
 import { RootStackParamList } from '../navigation/RootNavigator';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -21,13 +22,20 @@ export function SettingsScreen() {
   const [notifGranted, setNotifGranted] = useState(false);
   const [events, setEvents] = useState<CaptureEvent[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [plusStatus, setPlusStatus] = useState<EntitlementStatus | null>(null);
 
   const load = useCallback(() => {
     userPrefs.getUserName().then((n) => setName(n ?? ''));
     permissions.hasSmsPermission().then(setSmsGranted);
     permissions.isNotificationListenerEnabled().then(setNotifGranted);
     db.getCaptureEvents().then(setEvents);
+    entitlement.getStatus().then(setPlusStatus);
   }, []);
+
+  const toggleSimulatedPlus = async (next: boolean) => {
+    await entitlement.setSubscribedForTesting(next);
+    load();
+  };
 
   useFocusEffect(load);
 
@@ -101,6 +109,34 @@ export function SettingsScreen() {
         )}
       </DhanCard>
 
+      <Text style={styles.sectionLabel}>DHAN PLUS</Text>
+      <DhanCard style={{ marginBottom: 18 }}>
+        <View style={styles.row}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowLabel}>Status</Text>
+            <Text style={styles.rowValue}>{plusStatus ? describePlusStatus(plusStatus) : '…'}</Text>
+          </View>
+        </View>
+        <View style={[styles.row, { marginTop: 14 }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowLabel}>Simulate Dhan Plus subscription</Text>
+            <Text style={styles.rowValue}>Dev-only stand-in for Razorpay — not a real payment.</Text>
+          </View>
+          <Switch value={plusStatus?.subscribed ?? false} onValueChange={toggleSimulatedPlus} trackColor={{ true: colors.navy }} />
+        </View>
+      </DhanCard>
+
+      <Text style={styles.sectionLabel}>DATA & PRIVACY</Text>
+      <DhanCard style={{ marginBottom: 18 }}>
+        <View style={styles.row}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowLabel}>Backup</Text>
+            <Text style={styles.rowValue}>Back up to Google Drive — free for everyone</Text>
+          </View>
+          <DhanButton text="Open" size="sm" variant="secondary" onPress={() => navigation.navigate('BackupSettings')} />
+        </View>
+      </DhanCard>
+
       <Text style={styles.sectionLabel}>ACTIVITY ({events.length} scanned)</Text>
       <DhanCard style={{ marginBottom: 18 }} padding={8}>
         {events.length === 0 ? (
@@ -120,6 +156,19 @@ export function SettingsScreen() {
       <DhanButton text="Sign out" variant="destructive" full onPress={signOut} />
     </ScrollView>
   );
+}
+
+function describePlusStatus(s: EntitlementStatus): string {
+  if (s.subscribed) {
+    return s.billingStartsMillis && Date.now() < s.billingStartsMillis
+      ? `Dhan Plus — bonus period, billing starts ${dateLabel(s.billingStartsMillis)}`
+      : 'Dhan Plus';
+  }
+  if (s.inTrial) {
+    const daysLeft = Math.max(0, Math.ceil((s.trialEndsMillis - Date.now()) / (1000 * 60 * 60 * 24)));
+    return `Free trial — ${daysLeft} day${daysLeft === 1 ? '' : 's'} left`;
+  }
+  return 'Free';
 }
 
 const styles = StyleSheet.create({

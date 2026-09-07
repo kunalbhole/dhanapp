@@ -116,4 +116,13 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // Google Drive backup/restore (see android/app/src/main/java/com/dhan/app/backup/).
+    // All Google-Maven-only, same as every other AndroidX artifact here — unverified by a
+    // real compile in this sandbox (no route to maven.google.com), checked carefully by hand.
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }

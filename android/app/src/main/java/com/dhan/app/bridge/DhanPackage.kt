@@ -7,7 +7,7 @@ import com.facebook.react.uimanager.ViewManager
 
 class DhanPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
-        listOf(DhanDbModule(reactContext), DhanPermissionsModule(reactContext))
+        listOf(DhanDbModule(reactContext), DhanPermissionsModule(reactContext), DhanBackupModule(reactContext))
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> = emptyList()
 }
