@@ -1,4 +1,12 @@
 {
   "name": "DhanRN",
-  "displayName": "DhanRN"
+  "displayName": "DhanRN",
+  "expo": {
+    "name": "Dhan",
+    "slug": "dhan-rn",
+    "version": "0.0.1",
+    "android": {
+      "package": "com.dhan.app"
+    }
+  }
 }
