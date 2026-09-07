@@ -443,6 +443,84 @@ elsewhere (none found — this was the only occurrence). Committed and pushed st
 verified by re-reading against the actual reported compiler errors, not by a local
 recompile — the next EAS build is the real confirmation.
 
+## Session update — design-system fidelity fixes (fonts, icons, SMS titles)
+
+The app was functionally working but visually diverging from the design system in three
+concrete ways. All three are fixed and pushed to `main` (`6019f7d`).
+
+**1. Poppins font, actually linked this time.** The earlier "no custom font" decision
+(see the superseded note below) is reversed — Poppins Regular/Medium/SemiBold/Bold are
+real `.ttf` files, sourced from `@expo-google-fonts/poppins` (same OFL-licensed Google
+Fonts binaries, just repackaged), in `src/assets/fonts/`. `react-native.config.js` points
+`assets` at that folder, and **`npx react-native-asset` did the actual native linking** —
+this is a pure Node/filesystem tool (no Gradle/Xcode compile involved), so unlike
+everything else in this project, it could run for real in this sandbox and be verified
+directly rather than written blind:
+  - Android: the four `.ttf` files are copied into `android/app/src/main/assets/fonts/` —
+    confirmed present. That's the entire Android requirement; nothing else needed.
+  - iOS: `Info.plist`'s `UIAppFonts` array and `DhanRN.xcodeproj/project.pbxproj`'s file
+    references/build phase were updated by `react-native-asset`'s proper Xcode-project
+    parser (not hand-edited text). Structurally consistent on inspection, but — like every
+    other native change in this project — **not build-verified**, since this sandbox has
+    no Xcode/macOS toolchain at all (a stricter version of the usual "no Google Maven"
+    limitation). iOS also isn't the active build target (`eas.json`'s profile is
+    Android-only), so this is a bonus, not the priority.
+  - `src/components/DhanText.tsx` is a new drop-in replacement for RN's `Text` that reads
+    whatever `fontWeight` a style already sets (400/500/600/700) and maps it onto the
+    matching Poppins file, dropping `fontWeight` itself (mixing it with a static per-weight
+    font file makes Android synthesize an ugly second bold on top of an already-bold font).
+    Every screen and component now imports `{ DhanText as Text }` instead of RN's `Text` —
+    since the wrapper derives everything from styles that already existed, this needed
+    **zero per-style edits** app-wide, just an import swap in 14 files.
+  - `src/theme/type.ts`'s `h1` — the role every screen title (Budget/Transactions/Bills/
+    More/Welcome) actually uses — is now 20px/Poppins Medium, matching the locked
+    "page headings 20px Poppins Medium" spec exactly (it was 24px Bold before). `h2`
+    (Home's greeting, the merchant name on transaction detail — a different role) is
+    unchanged.
+  - **This needs a fresh native build, not just a JS bundle push.** Font files living in
+    `android/app/src/main/assets/` and referenced in the iOS Xcode project are packaged
+    into the APK/IPA at native-build time — an OTA JS-only update (if this project had one)
+    would not pick them up. The next EAS build will include them automatically since
+    they're committed to the repo; no extra EAS config needed.
+
+**2. Real Phosphor icons, not emoji.** Same "no icon library" decision reversed, but via
+`phosphor-react-native`, which renders each icon as **SVG** (`react-native-svg` peer dep)
+rather than a custom icon font — so this genuinely doesn't carry the font-asset-linking
+risk the original decision was worried about; autolinking handles `react-native-svg`'s
+native module the same way it already handles every other native dependency here, no
+manual asset step required. Verified the exact icon names against the installed
+package's source before wiring anything (`HouseIcon`, `ForkKnifeIcon`, `BankIcon`, etc. —
+the `*Icon`-suffixed names, not the deprecated bare ones). Tab bar icons use `weight="regular"`
+normally and `weight="fill"` on the focused tab, per spec. Category icons replace the
+emoji circle glyphs; `'other'` specifically gets a Bank icon rather than a generic mark,
+since that's where most unclassifiable bank/UPI SMS transactions land — this is also what
+fixes the "generic dots/arrow" complaint, since `⋯` and `↓` were exactly the emoji glyphs
+for `other`/`income` before.
+
+**3. SMS transaction titles no longer show the raw sender ID.** `TransactionParser.kt`'s
+merchant fallback chain was `extractMerchant(...) ?: sourceApp ?: "Transaction"` — when no
+payee/merchant could be extracted from the message body, it fell straight through to the
+raw SMS sender header (e.g. `"AX-AXISBK-S"`, `"JK-JIOPAY-S"`) with no cleanup at all. Added
+`humanizeSender()`: strips the DLT operator-prefix/service-suffix pattern
+(`XX-CODE-S` → `CODE`), looks the code up in a small known-bank/UPI-service map (`AXISBK`
+→ "Axis Bank", `JIOPAY` → "JioPay", etc.), and falls back to title-casing the stripped
+code for anything not in the map — never the raw header. Notification-derived `sourceApp`
+values (already human names like "Google Pay") don't match the DLT pattern and pass
+through unchanged. **This only affects newly-captured messages** — it's a parser change,
+not a data migration, so transactions already sitting in the database with a bad title
+from before this fix aren't automatically relabeled. Added `DhanDb.relabelSmsTransactions()`
+to close that gap: re-runs the fixed parser against each existing SMS transaction's
+already-stored `rawText`, updates `merchant`/`category` in place wherever the result
+differs, touches nothing else, and is safe to run more than once. Exposed as a
+"Clean up" button next to "Scan now" in Settings → Capture — flagged here since it's a
+capability beyond the literal ask, added because fixing the parser alone wouldn't have
+actually fixed what the user was looking at on their test device.
+
+All three fixes verified with `npx tsc --noEmit` and `eslint` (clean) both in the working
+source and, separately, in the actual git-tracked clone after a fresh `npm install` —
+the Kotlin/native side is unverified by a real compile, as always, checked carefully by
+hand and cross-referenced against the installed packages' actual source instead.
+
 ## Immediate next step — running the EAS build (user's machine)
 
 ```
@@ -457,3 +535,5 @@ No branch checkout needed anymore — `main` is the default branch and is the RN
 `extra.eas.projectId` is set yet) — accept the default. When it finishes, it prints an
 APK download link (also visible at expo.dev under the project's Builds tab). Download
 that APK to a phone and install it (enable "install from unknown sources" if prompted).
+This build is the one that will actually carry the new Poppins/Phosphor assets — a plain
+JS reload will not.

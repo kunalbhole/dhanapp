@@ -9,8 +9,13 @@ notifications to auto-log transactions, plus manual entry, budgets, and bills.
 capture engine underneath. Do new work here unless explicitly told otherwise.
 
 - `dhan-rn/src/` — TS UI: screens, React Navigation, design tokens, shared components.
-  No custom font or icon-font library (avoids native asset-linking risk); emoji glyphs
-  stand in for the original Phosphor icon set.
+  Poppins is bundled and natively linked (`src/assets/fonts/`, `react-native.config.js`,
+  linked via `npx react-native-asset`) — every screen renders text through
+  `src/components/DhanText.tsx`, a `Text` wrapper that maps each style's existing
+  `fontWeight` onto the right Poppins file. Icons are real Phosphor icons via
+  `phosphor-react-native` (SVG-based, no font-asset-linking risk) — Regular weight
+  default, Fill for the active tab. Both reverse an earlier "avoid native asset linking"
+  decision; see PROJECT_STATUS.md for why that became safe to do.
 - `dhan-rn/android/app/src/main/java/com/dhan/app/`
   - `db/DhanDb.kt` — plain `android.database.sqlite`, not Room (avoids an AndroidX/KSP
     annotation-processor dependency chain on top of RN's own native build).
