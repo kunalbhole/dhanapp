@@ -43,7 +43,7 @@ class DhanBackupModule(private val reactContext: ReactApplicationContext) : Reac
     private var pendingSignInPromise: Promise? = null
 
     private val activityEventListener = object : BaseActivityEventListener() {
-        override fun onActivityResult(activity: Activity?, requestCode: Int, resultCode: Int, data: Intent?) {
+        override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
             if (requestCode != RC_SIGN_IN) return
             val promise = pendingSignInPromise ?: return
             pendingSignInPromise = null
@@ -80,7 +80,7 @@ class DhanBackupModule(private val reactContext: ReactApplicationContext) : Reac
 
     @ReactMethod
     fun signIn(promise: Promise) {
-        val activity = currentActivity
+        val activity = reactContext.currentActivity
         if (activity == null) {
             promise.reject("dhan_no_activity", "No active screen to sign in from")
             return
