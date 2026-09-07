@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { DhanText as Text } from '../components/DhanText';
 import { useFocusEffect, useNavigation, CommonActions } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
@@ -22,6 +23,7 @@ export function SettingsScreen() {
   const [notifGranted, setNotifGranted] = useState(false);
   const [events, setEvents] = useState<CaptureEvent[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [relabeling, setRelabeling] = useState(false);
   const [plusStatus, setPlusStatus] = useState<EntitlementStatus | null>(null);
 
   const load = useCallback(() => {
@@ -57,6 +59,22 @@ export function SettingsScreen() {
       load();
     } finally {
       setScanning(false);
+    }
+  };
+
+  const relabelTransactions = async () => {
+    setRelabeling(true);
+    try {
+      const updated = await db.relabelSmsTransactions();
+      Alert.alert(
+        'Clean-up complete',
+        updated > 0
+          ? `Updated ${updated} transaction${updated === 1 ? '' : 's'} with better names.`
+          : 'Every transaction already has its best available name.',
+      );
+      load();
+    } finally {
+      setRelabeling(false);
     }
   };
 
@@ -107,6 +125,13 @@ export function SettingsScreen() {
             <DhanButton text="Scan now" size="sm" variant="secondary" loading={scanning} onPress={scanSmsHistory} />
           </View>
         )}
+        <View style={[styles.row, { marginTop: 14 }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowLabel}>Transaction labels</Text>
+            <Text style={styles.rowValue}>Clean up any old rows still showing a raw SMS sender ID as the title</Text>
+          </View>
+          <DhanButton text="Clean up" size="sm" variant="secondary" loading={relabeling} onPress={relabelTransactions} />
+        </View>
       </DhanCard>
 
       <Text style={styles.sectionLabel}>DHAN PLUS</Text>

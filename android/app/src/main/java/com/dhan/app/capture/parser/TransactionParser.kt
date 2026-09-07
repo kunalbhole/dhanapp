@@ -48,6 +48,35 @@ object TransactionParser {
     private val fromPersonRegex = Regex("""(?:received from|from)\s+([A-Za-z0-9&.'\- ]{2,40}?)\s+(?:via|on|using|\.|,|$)""", RegexOption.IGNORE_CASE)
     private val accountRegex = Regex("""(?:a/?c(?:count)?|card)\D{0,10}([Xx*]{2,}\d{2,6}|\d{4,6})""", RegexOption.IGNORE_CASE)
 
+    // Indian DLT SMS headers look like "AX-AXISBK-S" or "VM-HDFCBK" — telecom-operator
+    // prefix, registered entity code, optional service-type suffix. Strips both so the
+    // remaining code can be looked up (or at least title-cased) into something readable.
+    private val dltHeaderRegex = Regex("""^[A-Za-z]{2}-([A-Za-z0-9]+)(?:-[A-Za-z])?$""")
+
+    private val KNOWN_SENDER_CODES: Map<String, String> = mapOf(
+        "AXISBK" to "Axis Bank", "AXISB" to "Axis Bank",
+        "SBIINB" to "SBI", "SBIUPI" to "SBI UPI", "SBICRD" to "SBI Card", "ATMSBI" to "SBI", "SBIPSG" to "SBI",
+        "HDFCBK" to "HDFC Bank", "HDFCBN" to "HDFC Bank",
+        "ICICIB" to "ICICI Bank", "ICICIT" to "ICICI Bank",
+        "KOTAKB" to "Kotak Bank", "KMBL" to "Kotak Bank",
+        "PNBSMS" to "PNB", "PUNBNK" to "PNB",
+        "BOIIND" to "Bank of India",
+        "BOBTXN" to "Bank of Baroda", "BOBIBK" to "Bank of Baroda",
+        "UNIONB" to "Union Bank", "UBOI" to "Union Bank",
+        "CANBNK" to "Canara Bank",
+        "IDFCFB" to "IDFC First Bank",
+        "YESBNK" to "Yes Bank",
+        "INDBNK" to "IndusInd Bank", "INDUSB" to "IndusInd Bank",
+        "IDBIBK" to "IDBI Bank",
+        "JIOPAY" to "JioPay",
+        "GOOGLP" to "Google Pay", "GPAY" to "Google Pay",
+        "PHONPE" to "PhonePe",
+        "PAYTM" to "Paytm",
+        "AMAZNP" to "Amazon Pay", "AMZNPY" to "Amazon Pay",
+        "BHIMUP" to "BHIM UPI",
+        "NPCIUP" to "UPI",
+    )
+
     private val MERCHANT_CATEGORY_HINTS: List<Pair<Regex, String>> = listOf(
         Regex("swiggy|zomato|dominos|pizza|restaurant|cafe|starbucks|eatery", RegexOption.IGNORE_CASE) to "food",
         Regex("uber|ola|rapido|irctc|metro|petrol|fuel|indianoil|hpcl|bpcl", RegexOption.IGNORE_CASE) to "transport",
@@ -82,7 +111,7 @@ object TransactionParser {
         // safer for a budget app than inflating the user's apparent balance.
         val signedAmount = if (isCredit && !isDebit) amount else -amount
 
-        val merchantRaw = extractMerchant(text, isCredit = signedAmount > 0) ?: sourceApp ?: "Transaction"
+        val merchantRaw = extractMerchant(text, isCredit = signedAmount > 0) ?: humanizeSender(sourceApp) ?: "Transaction"
         val merchant = merchantRaw.trim().trim('.', ',').take(40).ifBlank { sourceApp ?: "Transaction" }
         val category = if (signedAmount > 0) "income" else inferCategory(merchant)
         val accountHint = accountRegex.find(text)?.groupValues?.get(1)
@@ -103,6 +132,26 @@ object TransactionParser {
         toMerchantRegex.find(text)?.let { return it.groupValues[1] }
         fromPersonRegex.find(text)?.let { return it.groupValues[1] }
         return null
+    }
+
+    /**
+     * Last-resort fallback when no merchant/payee could be extracted from the message body
+     * — cleans a raw SMS sender ID into a human-readable bank/service name instead of
+     * showing e.g. "AX-AXISBK-S" as the transaction title. Notification-derived sourceApp
+     * values (already human names like "Google Pay", set by TxnNotificationListenerService)
+     * simply don't match the DLT header pattern and pass through unchanged.
+     */
+    private fun humanizeSender(sourceApp: String?): String? {
+        if (sourceApp.isNullOrBlank()) return null
+        val trimmed = sourceApp.trim()
+        val match = dltHeaderRegex.find(trimmed) ?: return trimmed
+        val code = match.groupValues[1].uppercase()
+        KNOWN_SENDER_CODES[code]?.let { return it }
+        // Unknown DLT code: still strictly better than the raw "XX-CODE-S" header — best
+        // effort title-case, turning a trailing BK/BNK/BANK into " Bank".
+        val cleaned = code.replace(Regex("(BK|BNK|BANK)$"), " Bank")
+        return cleaned.split(" ", "_").filter { it.isNotBlank() }
+            .joinToString(" ") { it.lowercase().replaceFirstChar(Char::uppercase) }
     }
 
     private fun prettifyHandle(handle: String): String =

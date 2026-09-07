@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { DhanText as Text } from '../components/DhanText';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors, CATEGORIES, CategoryKey, categoryFromKey } from '../theme/colors';
 import { type } from '../theme/type';
@@ -188,5 +189,5 @@ const styles = StyleSheet.create({
     borderColor: colors.borderDefault, borderRadius: 8, paddingHorizontal: 12, marginBottom: 14, backgroundColor: '#fff',
   },
   rupee: { color: colors.fg2, fontWeight: '600' },
-  amountInput: { flex: 1, fontSize: 15, color: colors.fg1 },
+  amountInput: { flex: 1, fontSize: 15, color: colors.fg1, fontFamily: 'Poppins-Regular' },
 });

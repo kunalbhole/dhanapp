@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Alert, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, SafeAreaView, StyleSheet, View } from 'react-native';
+import { DhanText as Text } from '../components/DhanText';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
 import { type } from '../theme/type';

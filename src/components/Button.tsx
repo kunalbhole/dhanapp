@@ -1,5 +1,6 @@
 import React from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, ViewStyle } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, ViewStyle } from 'react-native';
+import { DhanText as Text } from './DhanText';
 import { colors } from '../theme/colors';
 import { radius } from '../theme/type';
 

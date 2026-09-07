@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.dhan.app.capture.parser.TransactionParser
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -135,6 +136,49 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
             }
         }
         return arr.toString()
+    }
+
+    /**
+     * One-time cleanup for transactions captured before the sender-ID humanizing fix in
+     * TransactionParser (e.g. merchant stored as the raw "AX-AXISBK-S" SMS header instead of
+     * "Axis Bank"). Re-runs the parser against each SMS-sourced transaction's already-stored
+     * rawText/sourceApp and updates merchant/category in place wherever the result differs.
+     * Only ever improves existing rows — never inserts or deletes — so it's safe to run
+     * repeatedly. Returns the number of rows actually changed.
+     */
+    fun relabelSmsTransactions(): Int {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT id, merchant, sourceApp, rawText FROM transactions WHERE source = 'SMS' AND rawText IS NOT NULL",
+            null,
+        )
+        var updatedCount = 0
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            cursor.use {
+                val idIdx = it.getColumnIndexOrThrow("id")
+                val merchantIdx = it.getColumnIndexOrThrow("merchant")
+                val sourceAppIdx = it.getColumnIndexOrThrow("sourceApp")
+                val rawTextIdx = it.getColumnIndexOrThrow("rawText")
+                while (it.moveToNext()) {
+                    val rawText = it.getString(rawTextIdx) ?: continue
+                    val sourceApp = it.getString(sourceAppIdx)
+                    val storedMerchant = it.getString(merchantIdx)
+                    val parsed = TransactionParser.parse(rawText, sourceApp) ?: continue
+                    if (parsed.merchant == storedMerchant) continue
+                    val id = it.getLong(idIdx)
+                    db.execSQL(
+                        "UPDATE transactions SET merchant = ?, category = ?, accountHint = ? WHERE id = ?",
+                        arrayOf(parsed.merchant, parsed.category, parsed.accountHint, id.toString()),
+                    )
+                    updatedCount++
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return updatedCount
     }
 
     fun logCaptureEvent(source: String, sourceApp: String?, rawText: String, timestampMillis: Long, matched: Boolean, createdTxnId: Long?) {

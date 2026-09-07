@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
+import { DhanText as Text } from '../components/DhanText';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors, categoryFromKey, CATEGORIES } from '../theme/colors';
 import { type } from '../theme/type';

@@ -89,4 +89,9 @@ export const db = {
   /** One-time scan of the device's existing SMS inbox. Returns how many messages matched
    *  and became transactions. Requires SMS permission to already be granted. */
   scanHistoricalSms: (): Promise<number> => DhanDb.scanHistoricalSms(),
+
+  /** Re-labels already-stored SMS transactions with the current parser — fixes titles
+   *  captured before the sender-ID cleanup fix (e.g. "AX-AXISBK-S" -> "Axis Bank").
+   *  Returns how many rows were changed. Safe to run repeatedly. */
+  relabelSmsTransactions: (): Promise<number> => DhanDb.relabelSmsTransactions(),
 };

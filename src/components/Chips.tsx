@@ -1,5 +1,6 @@
 import React, { PropsWithChildren } from 'react';
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { Pressable, StyleSheet } from 'react-native';
+import { DhanText as Text } from './DhanText';
 import { colors } from '../theme/colors';
 import { radius } from '../theme/type';
 

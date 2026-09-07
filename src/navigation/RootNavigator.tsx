@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, View } from 'react-native';
+import { CalendarCheckIcon, ChartPieIcon, GearIcon, HouseIcon, type Icon, ListBulletsIcon } from 'phosphor-react-native';
 import { colors } from '../theme/colors';
 import { userPrefs } from '../native/UserPrefs';
 
@@ -37,12 +38,12 @@ export type MainTabParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
-const TAB_GLYPH: Record<keyof MainTabParamList, string> = {
-  Home: '🏠',
-  Transactions: '📜',
-  Budget: '📊',
-  Bills: '🧾',
-  Settings: '⚙️',
+const TAB_ICONS: Record<keyof MainTabParamList, Icon> = {
+  Home: HouseIcon,
+  Transactions: ListBulletsIcon,
+  Budget: ChartPieIcon,
+  Bills: CalendarCheckIcon,
+  Settings: GearIcon,
 };
 
 function MainTabs() {
@@ -52,7 +53,10 @@ function MainTabs() {
         headerShown: false,
         tabBarActiveTintColor: colors.navy,
         tabBarInactiveTintColor: colors.fg3,
-        tabBarIcon: () => <Text style={{ fontSize: 20 }}>{TAB_GLYPH[route.name as keyof MainTabParamList]}</Text>,
+        tabBarIcon: ({ focused, color, size }) => {
+          const IconComponent = TAB_ICONS[route.name as keyof MainTabParamList];
+          return <IconComponent color={color} size={size} weight={focused ? 'fill' : 'regular'} />;
+        },
       })}>
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Transactions" component={TransactionsScreen} options={{ title: 'Txns' }} />

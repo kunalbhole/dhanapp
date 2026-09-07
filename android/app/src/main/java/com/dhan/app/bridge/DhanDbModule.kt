@@ -117,4 +117,13 @@ class DhanDbModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
             .onSuccess { promise.resolve(it) }
             .onFailure { promise.reject("dhan_sms_scan_error", it) }
     }
+
+    /** Re-labels already-stored SMS transactions using the current parser (fixes titles
+     *  captured before the sender-ID humanizing fix). Returns the number of rows changed. */
+    @ReactMethod
+    fun relabelSmsTransactions(promise: Promise) {
+        runCatching { db.relabelSmsTransactions() }
+            .onSuccess { promise.resolve(it) }
+            .onFailure { promise.reject("dhan_db_error", it) }
+    }
 }
