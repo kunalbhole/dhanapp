@@ -416,6 +416,33 @@ Requested and carried out this session, in order:
 yet. `2nd-update` gets cleaned up once `main` and its EAS build are confirmed stable;
 `1st-update` stays permanently as the archived native-Kotlin reference.
 
+## Session update — first real EAS build caught a genuine build-breaking bug, fixed
+
+The first actual EAS build off `main` (the real Kotlin/Gradle compile this project has
+never had access to locally — see "Constraints of the working sandbox" — finally ran for
+real, in the user's own environment) failed with two compile errors in
+`android/app/src/main/java/com/dhan/app/bridge/DhanBackupModule.kt`, both from the same
+root cause, both from code written without ever being compiler-checked:
+
+- `activityEventListener`'s `onActivityResult` override declared its `activity` parameter
+  as nullable (`Activity?`). `BaseActivityEventListener`'s actual method takes a
+  non-nullable `Activity`, so Kotlin didn't recognize this as a valid override at all
+  ("overrides nothing").
+- `signIn()` read `currentActivity` as if it were a member of `DhanBackupModule` itself;
+  it's actually a member of `reactContext`. Because that reference never resolved, the
+  `activity.startActivityForResult(...)` call right after it failed too ("unresolved
+  reference") — one root cause, two reported errors.
+
+Fixed exactly as diagnosed from the real compiler output: the override's parameter is now
+non-nullable `Activity`, and `signIn()` reads `reactContext.currentActivity` explicitly.
+Re-read the file afterward to confirm both changes were applied correctly and checked the
+rest of the `android/` tree for the same `currentActivity`-without-`reactContext` pattern
+elsewhere (none found — this was the only occurrence). Committed and pushed straight to
+`main` (not `2nd-update`, per the standing branch-priority note above) as
+`14a6b7d`. This sandbox still has no route to Google's Maven repo, so this fix is
+verified by re-reading against the actual reported compiler errors, not by a local
+recompile — the next EAS build is the real confirmation.
+
 ## Immediate next step — running the EAS build (user's machine)
 
 ```
