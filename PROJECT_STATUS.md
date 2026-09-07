@@ -537,3 +537,88 @@ APK download link (also visible at expo.dev under the project's Builds tab). Dow
 that APK to a phone and install it (enable "install from unknown sources" if prompted).
 This build is the one that will actually carry the new Poppins/Phosphor assets — a plain
 JS reload will not.
+
+## Session update — Budget page rebuilt around frameworks and multiple budgets
+
+The previous Budget page (a single flat "Total budget" field plus generic category chips,
+built two sessions ago) didn't match the actual locked spec and has been replaced.
+**No visual reference was attached to this request** — per the standing process from the
+Claude Design redesign-brief session, implementation normally waits for a screenshot/share
+link per cluster. Given how precise this brief was about structure and behavior (accordion
+vs. tabs, Edit-flow-only framework switching, inheritance rules) rather than pixel details,
+I proceeded from the text spec directly rather than blocking — but exact spacing/copy here
+should be treated as provisional until a real Claude Design reference for this screen shows
+up, same caveat as the entitlement/backup work before it.
+
+**Data model — new, with a real migration.** `budgets` was a flat (category, monthKey) →
+amount table with no concept of more than one budget existing. `DhanDb`'s `DB_VERSION`
+goes 1 → 2:
+- New `budget_defs` table: `id, name, type (PERSONAL|PROJECT), frameworkKey,
+  customFrameworkJson`. A "Personal" row is seeded as id 1 on every fresh install and,
+  for existing installs, by the upgrade migration — Personal is always id 1, a convention
+  several other places (onboarding's budget-seeding, backup import) rely on.
+- `budgets` gains a `budgetDefId` column and its unique constraint becomes
+  `(budgetDefId, category, monthKey)` instead of just `(category, monthKey)`, so the same
+  category can have independent caps under different budgets.
+- The upgrade path (`onUpgrade`, not just `onCreate`) renames the old table, recreates it
+  with the new shape, copies every existing row across onto the new Personal budget
+  (including the `__total__` sentinel row the total-budget field already used), and drops
+  the old table. **This is the first real schema migration this project has needed** —
+  worth deliberately testing against a device with real existing budget data before
+  trusting it, since this sandbox still can't run a real Android build to exercise it.
+- Backup/restore (`exportAllJson`/`importAllJson`) now includes `budgetDefs`, with the
+  same "Personal is always id 1, remap everything else" logic used for friends/debts.
+
+**Frameworks (`src/data/frameworks.ts`)** — 50/30/20 is the default. **The "five
+alternative frameworks" aren't named anywhere in the design brief** (neither this message
+nor the earlier full redesign brief), so this is a flagged assumption, not a confirmed
+spec match: 70/20/10, 80/20 (Pay Yourself First), the 60% Solution, Envelope System, and
+Zero-Based Budgeting. Each framework is a set of named buckets with a percentage
+(summing to 100) and the spending categories that roll into it — a bucket with no
+categories (e.g. "Savings") represents money set aside rather than spent, and its amount
+is shown as `total × percent` with nothing further to break down. Envelope System and
+Zero-Based both use one bucket per spending category as a structural stand-in for
+"no fixed split" — this is a simplification (see below).
+
+**BudgetScreen.tsx** — "Your budgets": Personal first, then any Project budgets, as
+expandable accordion cards (decided explicitly over tabs or a dropdown). The whole card
+is the tap target, no chevron. A 3-dot menu (⋯, via `Alert.alert`'s button list rather
+than a new popover component) offers Edit always, Delete only for Project budgets — never
+for Personal. Expanding a card shows a read-only framework breakdown: each bucket's
+derived amount, and for spending buckets, per-category rows underneath with the same
+distinct-per-category bar colors the old page had (not a single flat tone) — nothing here
+is editable inline; that's the whole point of moving editing into its own screen.
+
+**EditBudgetScreen.tsx (new)** — the only place "Change framework" exists, per spec.
+- Total budget field: changing it **auto-scales every existing category allocation
+  proportionally** (new/old ratio applied to each). The brief mentioned this as one of
+  two options ("auto-scale... or manual rebalance") — only auto-scale is implemented;
+  a manual-rebalance mode is not a separate toggle, flagged as a scope simplification.
+- Framework row shows the current framework with a "Change" action; picking a different
+  one confirms first ("...will reset your category allocations to the new framework's
+  defaults... total stays the same"), then clears category rows and reseeds them from the
+  new framework's buckets × the existing total.
+- Per-category amounts are editable inline, grouped under their bucket, with a single
+  "Save allocations" action.
+
+**CreateBudgetScreen.tsx (new)** — name, framework (all 6 + Custom), and a **required**
+total budget amount — required specifically so "pre-filled default categories per
+framework, never starts empty" is actually guaranteed rather than aspirational. Calls the
+exact same `createBudgetDef`/allocation-seeding path regardless of type, so Project
+budgets inherit Personal's framework structure by construction, not by a parallel code
+path that could drift from it.
+
+**CustomFrameworkBuilderScreen.tsx (new)** — reachable from both Create and Edit's
+framework picker. **Its UX isn't specified anywhere in either brief**, flagged per your
+own instruction to flag ambiguity here specifically: this is a functional first pass —
+add/rename/remove named buckets, a percent per bucket validated to sum to 100, categories
+assigned via toggle chips — not a considered design. Most likely piece to need real
+revision once an actual visual reference for it exists.
+
+**Not done in this pass, flagged rather than silently skipped**: month-picker/calendar
+modal for switching months (Budget still only ever shows the current month, same as
+before); an icon/emoji picker at budget-creation time (mentioned in the original fuller
+redesign brief, not repeated in this request, so left out rather than assumed back in).
+
+Verified with `npx tsc --noEmit` and `eslint` — clean — in both the working source and,
+separately, the actual git-tracked clone after a fresh `npm install`.
