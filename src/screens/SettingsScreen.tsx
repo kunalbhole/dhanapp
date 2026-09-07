@@ -1,0 +1,139 @@
+import React, { useCallback, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect, useNavigation, CommonActions } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { colors } from '../theme/colors';
+import { type } from '../theme/type';
+import { db, CaptureEvent } from '../native/DhanDb';
+import { permissions } from '../native/DhanPermissions';
+import { userPrefs } from '../native/UserPrefs';
+import { DhanCard } from '../components/Card';
+import { DhanButton } from '../components/Button';
+import { timeLabel, dayGroupLabel } from '../utils/format';
+import { RootStackParamList } from '../navigation/RootNavigator';
+
+type Nav = NativeStackNavigationProp<RootStackParamList>;
+
+export function SettingsScreen() {
+  const navigation = useNavigation<Nav>();
+  const [name, setName] = useState('');
+  const [smsGranted, setSmsGranted] = useState(false);
+  const [notifGranted, setNotifGranted] = useState(false);
+  const [events, setEvents] = useState<CaptureEvent[]>([]);
+  const [scanning, setScanning] = useState(false);
+
+  const load = useCallback(() => {
+    userPrefs.getUserName().then((n) => setName(n ?? ''));
+    permissions.hasSmsPermission().then(setSmsGranted);
+    permissions.isNotificationListenerEnabled().then(setNotifGranted);
+    db.getCaptureEvents().then(setEvents);
+  }, []);
+
+  useFocusEffect(load);
+
+  const requestSms = async () => {
+    const granted = await permissions.requestSmsPermission();
+    setSmsGranted(granted);
+  };
+
+  const scanSmsHistory = async () => {
+    setScanning(true);
+    try {
+      const matched = await db.scanHistoricalSms();
+      Alert.alert(
+        'Scan complete',
+        matched > 0
+          ? `Found ${matched} transaction${matched === 1 ? '' : 's'} in your SMS history.`
+          : 'No bank/UPI transactions found in your SMS history.',
+      );
+      load();
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const signOut = () => {
+    Alert.alert('Sign out of Dhan?', 'Your data stays on this device.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: async () => {
+          await userPrefs.clear();
+          navigation.dispatch(CommonActions.reset({ index: 0, routes: [{ name: 'Welcome' }] }));
+        },
+      },
+    ]);
+  };
+
+  return (
+    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+      <Text style={styles.title}>More</Text>
+
+      <DhanCard style={{ marginBottom: 18 }}>
+        <Text style={styles.name}>{name || 'Dhan user'}</Text>
+      </DhanCard>
+
+      <Text style={styles.sectionLabel}>CAPTURE</Text>
+      <DhanCard style={{ marginBottom: 18 }}>
+        <View style={styles.row}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowLabel}>SMS capture</Text>
+            <Text style={styles.rowValue}>{smsGranted ? 'On' : 'Off'}</Text>
+          </View>
+          {!smsGranted && <DhanButton text="Grant" size="sm" onPress={requestSms} />}
+        </View>
+        <View style={[styles.row, { marginTop: 14 }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowLabel}>Notification capture</Text>
+            <Text style={styles.rowValue}>{notifGranted ? 'On' : 'Off'}</Text>
+          </View>
+          {!notifGranted && <DhanButton text="Grant" size="sm" onPress={permissions.openNotificationListenerSettings} />}
+        </View>
+        {smsGranted && (
+          <View style={[styles.row, { marginTop: 14 }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowLabel}>SMS history</Text>
+              <Text style={styles.rowValue}>Scan past messages for transactions missed before</Text>
+            </View>
+            <DhanButton text="Scan now" size="sm" variant="secondary" loading={scanning} onPress={scanSmsHistory} />
+          </View>
+        )}
+      </DhanCard>
+
+      <Text style={styles.sectionLabel}>ACTIVITY ({events.length} scanned)</Text>
+      <DhanCard style={{ marginBottom: 18 }} padding={8}>
+        {events.length === 0 ? (
+          <Text style={styles.empty}>No activity yet. Turn on capture above to see scanned messages here.</Text>
+        ) : (
+          events.slice(0, 15).map((e, i) => (
+            <View key={e.id} style={[styles.eventRow, i !== Math.min(events.length, 15) - 1 && styles.divider]}>
+              <Text style={styles.eventTitle} numberOfLines={1}>
+                {e.matched ? '✅ Transaction detected' : '· Not a transaction'} · {e.sourceApp ?? e.source}
+              </Text>
+              <Text style={styles.eventTime}>{dayGroupLabel(e.timestampMillis)} {timeLabel(e.timestampMillis)}</Text>
+            </View>
+          ))
+        )}
+      </DhanCard>
+
+      <DhanButton text="Sign out" variant="destructive" full onPress={signOut} />
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.appBg },
+  content: { padding: 16, paddingBottom: 40 },
+  title: { ...type.h1, color: colors.fg1, marginBottom: 14 },
+  name: { fontSize: 16, fontWeight: '700', color: colors.fg1 },
+  sectionLabel: { ...type.label, color: colors.fg3, marginBottom: 8, marginLeft: 4 },
+  row: { flexDirection: 'row', alignItems: 'center' },
+  rowLabel: { fontSize: 14, fontWeight: '600', color: colors.fg1 },
+  rowValue: { fontSize: 12, color: colors.fg3, marginTop: 2 },
+  empty: { color: colors.fg3, fontSize: 13, padding: 16, textAlign: 'center' },
+  eventRow: { paddingVertical: 10 },
+  divider: { borderBottomWidth: 1, borderBottomColor: colors.borderSubtle },
+  eventTitle: { fontSize: 13, fontWeight: '600', color: colors.fg1 },
+  eventTime: { fontSize: 11, color: colors.fg3, marginTop: 2 },
+});

@@ -1,85 +1,68 @@
-# Dhan — Android app
+# Dhan (React Native)
 
-Native Android implementation (Kotlin + Jetpack Compose) of the "Dhan" personal-finance
-app designed in `../project/` (a Claude Design handoff — see `../README.md` and
-`../chats/` for the design history). Tracks incoming/outgoing money by reading incoming
-SMS and notifications from bank/UPI apps, in addition to manual entry.
+Personal finance / expense tracker for Android. React Native 0.87 + TypeScript UI over a
+native Kotlin capture engine (SMS + notification listener) backed by plain SQLite.
 
-## Stack
+This is a **rewrite** of an earlier native Kotlin/Compose version of the same app (see the
+project history for why: mainly to get real `npm install`/`tsc`/`eslint` verification in a
+sandboxed dev environment that couldn't reach Google's Maven repo for AndroidX/Compose).
+Verified for real in that environment:
+- `npm install` — 865+ packages resolve cleanly from the public registry
+- `npx tsc --noEmit` — zero type errors across the whole app
+- `npx eslint` — zero errors (only cosmetic inline-style style warnings)
 
-- Kotlin, Jetpack Compose, Material 3
-- Room (local SQLite) — **all data stays on-device**, no backend, no sync
-- Navigation Compose
-- minSdk 26, target/compileSdk 34
+What's **not** verified locally: the actual Android/Gradle compile (`assembleDebug`) needs
+Google's Maven repo for the Android Gradle Plugin, same as any Android project — that step
+only runs for real in CI (see `.github/workflows/android-build.yml`) or in your own Android
+Studio.
 
-## Opening the project
+## Scope of this rewrite
 
-Open the `android/` directory (not the repo root) in Android Studio (Koala or newer).
-It should sync via Gradle automatically — the project needs network access to Google's
-Maven repo (`dl.google.com` / `maven.google.com`) and Maven Central to resolve
-AndroidX/Compose/Room dependencies, which **this development sandbox did not have**, so
-none of this has been compiled or run yet. Treat the first build in Android Studio as
-the real first compile — expect to fix a handful of small issues (an unresolved import,
-a missing `when` branch, an icon slug that fell through `DhanIcon.of()`'s fallback) since
-every file here was written by hand/by AI agents against a fixed API contract rather than
-against a compiler.
+Deliberately narrower than the original Kotlin version's 27 screens — this pass focuses on
+the core loop done well, not a second exhaustive port:
+
+- **Welcome** (consolidates the original Splash/Onboarding/SignUp/Permissions/Login into one
+  screen — name entry + SMS permission request)
+- **Home** — balance summary, quick add, recent transactions
+- **Transactions** — filterable list, grouped by day
+- **Budget** — category caps (add/edit inline), spend-vs-cap bars
+- **Bills** — due-soon list, mark-as-paid, add bill
+- **Settings** — SMS/notification capture toggles (real, wired to actual permission state),
+  capture activity log, sign out
+- **Transaction detail** — full record incl. capture provenance (raw SMS/notification text)
+
+Not rebuilt in this pass (present in the original Kotlin version, cut for scope): debt/split
+tracking, goals, insights, linked-accounts/help/paywall screens, multi-step onboarding.
 
 ## What's real vs. mock
 
-**Real, wired to the on-device Room database:**
-- Manual transaction/bill/goal entry, budget caps, category spend tracking
-- SMS capture (`capture/sms/SmsReceiver.kt`) and notification capture
-  (`capture/notif/TxnNotificationListenerService.kt`) → regex parser
-  (`capture/parser/TransactionParser.kt`) → transactions table
-- The "Activity" screen shows the real capture-engine audit log (every message scanned,
-  matched or not) — this is a rebuild of the source design's static "Notifications"
-  screen using real data instead of the prototype's fake alerts
-- Settings' SMS/notification-capture toggles reflect and act on real Android permission
-  state
+Same as the original: SMS/notification capture and the regex transaction parser are real
+and functional. Bank-account linking, payments, and Google sign-in remain out of scope /
+mocked — no backend exists for any of that here either.
 
-**Mock / out of scope (matches the source prototype, which was also a mock in these
-areas — no backend exists for any of this):**
-- Google sign-in, OTP verification, bank-account linking (LinkBankScreen) — visual only
-- Dhan Plus payments — "Upgrade" just flips a local flag, no real billing
-- Friend/debt "Settle up" — records a local ledger entry, never moves real money (same
-  as the source design's own disclaimer text on that screen)
+## Architecture
 
-## The SMS/notification permission model — read before shipping
+- `src/` — TypeScript UI: screens, navigation (React Navigation), design tokens, shared
+  components. No custom font or icon-font library (would need native asset linking); emoji
+  glyphs stand in for the original Phosphor icon set.
+- `android/app/src/main/java/com/dhan/app/`
+  - `db/DhanDb.kt` — plain `android.database.sqlite` (not Room — avoids an extra
+    AndroidX/KSP annotation-processor dependency chain)
+  - `capture/` — `SmsReceiver`, `TxnNotificationListenerService`, `TransactionParser`
+    (ported near-verbatim from the earlier Kotlin app), `CaptureIngest`
+  - `bridge/` — `DhanDbModule` / `DhanPermissionsModule`, the React Native native-module
+    bridge JS calls through to reach the above
 
-- **SMS** (`RECEIVE_SMS` / `READ_SMS`): Google Play's SMS/Call Log permissions policy
-  restricts these to apps approved as the user's **default SMS handler**, with narrow
-  exceptions. This app is *not* a default SMS handler (it's a finance tracker, not a
-  messaging app), so **it will not pass Play Store review with these permissions as-is**.
-  Options: (a) sideload only / internal distribution, (b) drop SMS capture and rely on
-  notification capture only, (c) pursue a Play policy exception if one genuinely
-  applies to this use case (unlikely). This tradeoff was surfaced during design, not
-  discovered late — decide deliberately before a Play Store submission.
-- **Notification access** (`NotificationListenerService`): a Play-restricted permission
-  category too, but with a clearer path — Play permits it for apps whose core function
-  is legitimately served by reading notifications (this one qualifies) as long as the
-  listing and in-app disclosure are honest about it. `TxnNotificationListenerService`
-  only reads notifications from an explicit allowlist of known bank/UPI/wallet package
-  names (`TRACKED_PACKAGES`) — it deliberately does not read arbitrary app notifications
-  even though a granted listener technically could.
-- Both permissions are runtime-revocable by the user at any time; the app should (and
-  mostly does, via Settings) degrade gracefully to manual entry when they're off.
+## Running it
 
-## Parser tuning
+```
+npm install
+npx react-native run-android   # device/emulator connected, or
+cd android && ./gradlew assembleDebug   # just build the APK
+```
 
-`TransactionParser` (regex-based, offline, no ML) is a best-effort heuristic tuned
-against common Indian bank/UPI message phrasing, not a bank-specific parser. Expect to
-tune `MERCHANT_CATEGORY_HINTS`, the debit/credit keyword lists, and the exclusion list
-(promo/OTP filtering) against real message samples from your own bank/UPI apps — the
-`capture_events` table (visible in the Activity screen) is there specifically so you can
-see what got skipped and why.
+## Permissions note (same as before)
 
-## Known gaps from this pass
-
-- No unit/instrumentation tests yet.
-- No app icon beyond the generated adaptive-icon vector (converted programmatically from
-  the source SVG logo — worth a design pass).
-- `EditBudgetScreen`/`GoalsScreen` etc. use plain local Compose state, no ViewModel
-  layer — fine at this scope, would want revisiting if the screens grow more complex.
-- Multi-month budget history navigation in `BudgetScreen` works for past months backed
-  by real data, but there's no seed/import path for historical transactions predating
-  first install.
+`RECEIVE_SMS`/`READ_SMS` are Play-Store-restricted to default SMS handlers — fine for
+sideloading, not for Play submission as-is. Notification-listener access has a clearer Play
+path since the app's function genuinely depends on it. Both are user-revocable at any time.
