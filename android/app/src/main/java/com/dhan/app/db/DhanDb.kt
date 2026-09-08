@@ -30,10 +30,15 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
                 source TEXT NOT NULL,
                 sourceApp TEXT,
                 rawText TEXT,
-                accountHint TEXT
+                accountHint TEXT,
+                dedupKey TEXT
             )
             """.trimIndent(),
         )
+        // Exact-match dedup guard for captured (SMS/notification) rows only — dedupKey is
+        // left NULL for manual entries and restored backups (see insertCapturedTransaction),
+        // and the partial WHERE clause means NULL never participates in the uniqueness check.
+        db.execSQL("CREATE UNIQUE INDEX idx_transactions_dedup ON transactions(dedupKey) WHERE dedupKey IS NOT NULL")
         db.execSQL(
             """
             CREATE TABLE budget_defs (
@@ -187,6 +192,101 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
                 }
             }
         }
+        if (oldVersion < 4) {
+            // Data-integrity fix #2: transactions had no dedup mechanism at all, so
+            // re-processing the same source event (re-running the historical SMS scan,
+            // reinstalling, or SMS + notification capture both catching the same bank
+            // event) silently inserted duplicate rows. Two layers, going forward:
+            // (1) an exact-match `dedupKey` (hash of source|sourceApp|timestampMillis|
+            // rawText) enforced by a DB-level unique index — guards same-source
+            // re-delivery even across a race, since a SELECT-then-INSERT check alone
+            // can't be atomic; (2) a fuzzy cross-source check at insert time (same
+            // amount, a *different* source, within a few minutes) — see
+            // insertCapturedTransaction/findCrossSourceDuplicateId — since SMS body text
+            // and notification text/sourceApp for the same real-world event are never
+            // byte-identical, so an exact key can never catch that case. Existing rows
+            // keep dedupKey = NULL; only newly-captured rows get one (manual entries and
+            // restored backups stay exempt too, via the partial index's WHERE clause).
+            db.execSQL("ALTER TABLE transactions ADD COLUMN dedupKey TEXT")
+            db.execSQL("CREATE UNIQUE INDEX idx_transactions_dedup ON transactions(dedupKey) WHERE dedupKey IS NOT NULL")
+
+            // One-time cleanup of exact duplicates already sitting in the database: same
+            // merchant, amount, timestampMillis, and source, keep only the earliest
+            // (lowest id) row per group. Deliberately exact-match only — a destructive
+            // DELETE run unattended needs a false-positive-free match, and cross-source
+            // near-duplicates already in the database (SMS vs. notification catching the
+            // same real event under different timestamps/text) aren't safely identifiable
+            // this way; see PROJECT_STATUS.md for why that's left for the user to spot
+            // rather than auto-merged.
+            db.execSQL(
+                """
+                DELETE FROM transactions
+                WHERE id NOT IN (
+                    SELECT MIN(id) FROM transactions
+                    GROUP BY merchant, amount, timestampMillis, source
+                )
+                """.trimIndent(),
+            )
+        }
+    }
+
+    /**
+     * SHA-256 hex digest of the fields that identify "this is the same underlying
+     * capture event" — two genuinely different transactions essentially never share all
+     * of source, sourceApp, timestampMillis, and the exact rawText. Hashed (rather than
+     * stored raw) to keep the indexed column a fixed, short size regardless of message
+     * length.
+     */
+    private fun dedupKeyFor(source: String, sourceApp: String?, timestampMillis: Long, rawText: String): String {
+        val raw = "$source|${sourceApp.orEmpty()}|$timestampMillis|$rawText"
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * Fuzzy cross-source duplicate check: is there already a transaction of the same
+     * amount, from a *different* source, within [windowMs] of this timestamp? SMS and
+     * notification capture can both fire for the same real-world bank event (see
+     * PROJECT_STATUS.md — several tracked notification packages are the same banks whose
+     * SMS alerts are parsed), but their rawText/sourceApp are never byte-identical and
+     * their timestamps (SMS delivery vs. notification post time) can differ by a couple
+     * of minutes — so this can't be an exact-key match. Restricted to a *different*
+     * source than the one being inserted so two genuinely-distinct same-source
+     * transactions of equal amount within the window (e.g. two SMS-captured payments a
+     * minute apart) are never affected — same-source exact duplicates are already fully
+     * handled by the dedupKey unique index.
+     */
+    private fun findCrossSourceDuplicateId(amount: Double, timestampMillis: Long, source: String, windowMs: Long = 120_000L): Long? {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT id FROM transactions WHERE amount = ? AND source != ? AND timestampMillis BETWEEN ? AND ? LIMIT 1",
+            arrayOf(amount.toString(), source, (timestampMillis - windowMs).toString(), (timestampMillis + windowMs).toString()),
+        )
+        return cursor.use { if (it.moveToFirst()) it.getLong(0) else null }
+    }
+
+    /**
+     * Insert path for SMS/notification-captured transactions only (see CaptureIngest) —
+     * distinct from [insertTransaction], which manual entry (AddTransactionScreen) and
+     * backup restore use and which deliberately never sets dedupKey, so those rows are
+     * naturally exempt from the dedup machinery below. Returns null (no row inserted)
+     * when the event is judged a duplicate by either the fuzzy cross-source check or the
+     * exact dedupKey unique index, rather than a new transaction id.
+     */
+    fun insertCapturedTransaction(merchant: String, amount: Double, category: String, timestampMillis: Long, source: String, sourceApp: String?, rawText: String, accountHint: String?): Long? {
+        if (findCrossSourceDuplicateId(amount, timestampMillis, source) != null) return null
+        val values = ContentValues().apply {
+            put("merchant", merchant)
+            put("amount", amount)
+            put("category", category)
+            put("timestampMillis", timestampMillis)
+            put("source", source)
+            put("sourceApp", sourceApp)
+            put("rawText", rawText)
+            put("accountHint", accountHint)
+            put("dedupKey", dedupKeyFor(source, sourceApp, timestampMillis, rawText))
+        }
+        val id = writableDatabase.insertWithOnConflict("transactions", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+        return if (id == -1L) null else id
     }
 
     fun insertTransaction(merchant: String, note: String?, amount: Double, category: String, timestampMillis: Long, source: String, sourceApp: String?, rawText: String?, accountHint: String?): Long {
@@ -611,7 +711,7 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
 
     companion object {
         private const val DB_NAME = "dhan.db"
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
 
         @Volatile private var instance: DhanDb? = null
 

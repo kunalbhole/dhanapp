@@ -661,3 +661,74 @@ unverified by a real device run — this sandbox still can't do a real Android c
 checked carefully by hand and cross-checked against the actual regex behavior in Python
 (equivalent backtracking semantics to Java/Kotlin's regex engine for this pattern) rather
 than assumed correct.
+
+## Session update — data-integrity bug #2: no dedup, duplicate transactions
+
+**Bug.** The `transactions` table had no deduplication mechanism at all — any
+re-processing of the same underlying event silently inserted a second row with the same
+amount/merchant/timestamp. Concretely: re-running the Settings "Scan now" historical SMS
+scan, reinstalling the app (which replays SMS history during onboarding), or SMS capture
+and notification capture both catching the *same* real-world bank event.
+
+**Point 4 findings — SMS + notification capture genuinely can double-catch the same
+event.** Checked `TxnNotificationListenerService.TRACKED_PACKAGES` against the banks
+`TransactionParser` recognizes: several tracked notification packages
+(`com.axis.mobile`/Axis Bank, `com.csam.icici.bank.imobile`/ICICI, `com.snapwork.hdfc`/
+HDFC, the Kotak/SBI/PNB/BOB/Union Bank apps) are the exact same banks whose SMS debit/
+credit alerts are parsed — a user with both SMS read access and one of these banking
+apps' notification access granted can get both an SMS and a push notification for one
+real transaction. But their captured text is **not** the same string: SMS `sourceApp` is
+the raw DLT sender header (e.g. `"AX-AXISBK-S"`) while notification `sourceApp` is the
+human app name from `TRACKED_PACKAGES` (e.g. `"Axis Bank"`); SMS `rawText` is the full
+bank SMS body while notification `rawText` is title+text+bigText joined from a
+differently-worded push notification. `timestampMillis` also differs — SMS delivery time
+vs. notification post time can be a couple of minutes apart. So an **exact**-match dedup
+key (source|sourceApp|timestampMillis|rawText) provably cannot catch this case; confirms
+the brief's own point 4 concern, and a second, looser matching rule is needed alongside
+the exact one.
+
+**Fix — two layers, in `DhanDb.kt`:**
+1. **Exact-match layer.** `transactions` gains a `dedupKey TEXT` column (SHA-256 hex of
+   `source|sourceApp|timestampMillis|rawText`) plus
+   `CREATE UNIQUE INDEX idx_transactions_dedup ON transactions(dedupKey) WHERE dedupKey
+   IS NOT NULL` — a partial index, so manual entries and restored-backup rows (which never
+   set `dedupKey`) are naturally exempt rather than needing a sentinel value. Enforced at
+   the DB level via `insertWithOnConflict(..., CONFLICT_IGNORE)`, so it holds even across
+   a race (two inserts landing concurrently) that an application-level check-then-insert
+   can't fully close.
+2. **Fuzzy cross-source layer.** `findCrossSourceDuplicateId()` — before inserting, checks
+   for an existing row of the same amount, from a **different** source, within a 2-minute
+   window. Deliberately restricted to a different source so two genuinely distinct
+   same-source transactions of equal amount close together (e.g. two SMS-captured
+   payments a minute apart) are never affected — those are already fully protected by the
+   exact-key layer above.
+
+Both live in a new `DhanDb.insertCapturedTransaction()`, used only by `CaptureIngest`
+(the shared path behind `SmsReceiver` and `TxnNotificationListenerService`) — the existing
+`insertTransaction()` is untouched and still used by manual entry
+(`AddTransactionScreen`) and backup restore (`importAllJson`), which is exactly how those
+stay exempt from the dedup machinery per the brief's design. `CaptureIngest.process()`'s
+return value changed from "did this text match a transaction pattern" to "was a *new*
+transaction actually created" — needed so a re-run of the historical SMS scan reports how
+many transactions are genuinely new instead of re-claiming the same count every time,
+which would otherwise still read as duplicates to the user even after the DB itself
+stopped creating them.
+
+**Backfill.** `DB_VERSION` goes 3 → 4. `onUpgrade`'s new `oldVersion < 4` branch adds the
+column/index, then runs a one-time cleanup exactly as specified: groups existing rows by
+`(merchant, amount, timestampMillis, source)` and deletes all but the lowest `id` in each
+group. **Deliberately exact-match only** — a destructive `DELETE` run unattended on a
+finance app needs a false-positive-free match, and the fuzzy cross-source rule isn't one
+(two real distinct transactions of equal amount within a couple of minutes are
+possible, if unlikely). Consequence: **cross-source duplicate pairs that already exist in
+a user's database today are not auto-merged by this backfill** — only exact re-delivery
+duplicates (same source) are cleaned up automatically. Flagging this as a known gap rather
+than silently accepting the risk of a wrong auto-merge: a user who already has an SMS-row
+and a notification-row for the same real transaction will need to notice and delete one
+manually; going forward, no new cross-source duplicates will be created.
+
+Verified with `npx tsc --noEmit` and `eslint` — clean, no new errors (this is a native-only
+change; the JS/TS side is untouched). As with both migrations before it, unverified by a
+real device/compile — this sandbox still can't reach Google's Maven repo — checked by hand
+against the actual capture code paths (`SmsReceiver`, `TxnNotificationListenerService`,
+`CaptureIngest`) and the installed `TRACKED_PACKAGES` map rather than assumed.
