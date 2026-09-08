@@ -9,6 +9,7 @@ import { db, CaptureEvent } from '../native/DhanDb';
 import { permissions } from '../native/DhanPermissions';
 import { userPrefs } from '../native/UserPrefs';
 import { entitlement, EntitlementStatus } from '../native/Entitlement';
+import { appInfo, AppVersionInfo } from '../native/AppInfo';
 import { DhanCard } from '../components/Card';
 import { DhanButton } from '../components/Button';
 import { dateLabel, timeLabel, dayGroupLabel } from '../utils/format';
@@ -25,6 +26,7 @@ export function SettingsScreen() {
   const [scanning, setScanning] = useState(false);
   const [relabeling, setRelabeling] = useState(false);
   const [plusStatus, setPlusStatus] = useState<EntitlementStatus | null>(null);
+  const [version, setVersion] = useState<AppVersionInfo | null>(null);
 
   const load = useCallback(() => {
     userPrefs.getUserName().then((n) => setName(n ?? ''));
@@ -32,6 +34,7 @@ export function SettingsScreen() {
     permissions.isNotificationListenerEnabled().then(setNotifGranted);
     db.getCaptureEvents().then(setEvents);
     entitlement.getStatus().then(setPlusStatus);
+    appInfo.getAppVersion().then(setVersion);
   }, []);
 
   const toggleSimulatedPlus = async (next: boolean) => {
@@ -179,6 +182,12 @@ export function SettingsScreen() {
       </DhanCard>
 
       <DhanButton text="Sign out" variant="destructive" full onPress={signOut} />
+
+      {version && (
+        <Text style={styles.version}>
+          Dhan v{version.versionName} (build {version.versionCode})
+        </Text>
+      )}
     </ScrollView>
   );
 }
@@ -210,4 +219,5 @@ const styles = StyleSheet.create({
   divider: { borderBottomWidth: 1, borderBottomColor: colors.borderSubtle },
   eventTitle: { fontSize: 13, fontWeight: '600', color: colors.fg1 },
   eventTime: { fontSize: 11, color: colors.fg3, marginTop: 2 },
+  version: { fontSize: 11, color: colors.fg3, textAlign: 'center', marginTop: 20 },
 });

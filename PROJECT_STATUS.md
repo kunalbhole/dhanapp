@@ -732,3 +732,52 @@ change; the JS/TS side is untouched). As with both migrations before it, unverif
 real device/compile — this sandbox still can't reach Google's Maven repo — checked by hand
 against the actual capture code paths (`SmsReceiver`, `TxnNotificationListenerService`,
 `CaptureIngest`) and the installed `TRACKED_PACKAGES` map rather than assumed.
+
+## Session update — visible build identifier in Settings
+
+**What was asked:** a small line at the bottom of Settings → More showing the app version
+and build number, sourced from app.json's `version` and Android's `versionCode`/
+`versionName`, plus incrementing `versionCode` by 1 per build going forward — purely so a
+test device's installed build can always be confirmed during debugging.
+
+**Deviated from the literal source ask, and why.** app.json's `expo.version` is
+`"0.0.1"`; `android/app/build.gradle`'s `versionName` is `"1.0"` — these two have already
+drifted out of sync with each other, nothing keeps them synced (this isn't an `expo
+prebuild`-generated `android/` — it's committed directly and hand-maintained), and
+`eas.json`'s `cli.appVersionSource: "local"` means **EAS Build reads versionName/
+versionCode straight from `build.gradle` for a native Android build — app.json's
+`version` field isn't even consulted.** Displaying app.json's version here would show a
+number that's disconnected from what's actually in the APK — exactly the kind of
+confusion this feature exists to prevent. So the version line instead reads the
+installed APK's own `PackageInfo` at runtime (`versionName` + `versionCode`, via a new
+`getAppVersion()` on the native side) — the one value that's *structurally guaranteed* to
+match what's actually installed, immune to either source file drifting again. Flagging
+the `app.json` vs. `build.gradle` version-string mismatch here since it's worth
+reconciling on its own, separately from this change — not fixed as part of it since
+neither string is obviously "the wrong one" without knowing your intent for it.
+
+**Implementation:**
+- `DhanPermissionsModule.kt` gains `getAppVersion()` (`@ReactMethod`) — reads
+  `packageManager.getPackageInfo(packageName, 0)`, returns `{versionName, versionCode}` as
+  a JSON string (same convention as `DhanDbModule`). Uses `longVersionCode` on API 28+,
+  falling back to the deprecated `versionCode` field below that. Lives on the existing
+  `DhanPermissions` module rather than a new one — it's the smallest existing
+  native-utility module, and a single getter didn't justify a new `NativeModule` +
+  `DhanPackage` registration on its own; flagged in a doc comment since the pairing is
+  otherwise an odd fit.
+- New `src/native/AppInfo.ts` — thin JS wrapper (`appInfo.getAppVersion()`), kept as its
+  own file/export name even though it's backed by the `DhanPermissions` native module, so
+  the JS-side name doesn't read as version info belonging under "permissions."
+- `SettingsScreen.tsx` — loads it alongside everything else `load()` already fetches, and
+  renders `Dhan v{versionName} (build {versionCode})` as a small centered caption at the
+  very bottom of the screen, below "Sign out."
+- `android/app/build.gradle`: `versionCode` 1 → 2 for this build. **Going forward, bump
+  `versionCode` by 1 in every future commit that will actually ship as an EAS build** — this
+  is now the only thing that makes each build distinguishable on a test device via the
+  Settings line above; noted here so it isn't forgotten in a future session.
+
+Verified with `npx tsc --noEmit` and `eslint` — clean, no new errors — in both the working
+source and the actual git-tracked clone. Native-side `getAppVersion()` is, as always,
+unverified by a real compile in this sandbox (no route to Google's Maven repo) — checked
+by hand against the `PackageInfo` API and the existing `DhanDbModule`/
+`DhanPermissionsModule` conventions rather than assumed correct.
