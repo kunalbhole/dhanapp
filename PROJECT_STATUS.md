@@ -622,3 +622,42 @@ redesign brief, not repeated in this request, so left out rather than assumed ba
 
 Verified with `npx tsc --noEmit` and `eslint` — clean — in both the working source and,
 separately, the actual git-tracked clone after a fresh `npm install`.
+
+## Session update — data-integrity fix: comma-less amounts were being truncated
+
+**Bug.** `TransactionParser.kt`'s `amountRegex` had two alternatives; the first was
+`[0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]{1,2})?` — a `*` (zero-or-more) on the comma-group.
+For a comma-less amount like `"5000"`, `[0-9]{1,3}` greedily grabs the first 3 digits
+(`"500"`), the comma-group matches zero times (no comma follows), and the alternative
+"succeeds" on just `"500"`. Regex alternation doesn't backtrack into the second
+alternative once the first has matched, so the full digit run was never reached — **any
+comma-less amount of 4+ digits was silently truncated by one digit** (₹5,000 captured as
+₹500, ₹12,340 as ₹123, etc.). Comma-formatted amounts (`"5,000"`, `"1,00,000"`) were
+never affected, since the comma-group had something to actually match.
+
+**Fix.** Changed that `*` to `+`, so the first alternative only succeeds when at least one
+comma group is present — genuinely comma-formatted numbers only. A comma-less number now
+fails the first alternative entirely and falls through to the second
+(`[0-9]+(?:\.[0-9]{1,2})?`), which matches its full length. Verified against
+`"Rs.5000"` → `5000`, `"Rs.5,000"` → `5,000`, `"Rs.500"` → `500`, `"Rs.1,00,000"` →
+`1,00,000`.
+
+**This is a data fix, not just a forward fix.** Every device that had already captured a
+comma-less 4+ digit transaction (via SMS or notification) has a wrong amount sitting in
+`transactions.amount` right now — the parser fix alone doesn't touch existing rows.
+Unlike the earlier sender-ID relabel fix (`relabelSmsTransactions()`, a manual "Clean up"
+button the user has to know to tap), a silently wrong amount in a finance app isn't
+something to leave opt-in. `DhanDb.DB_VERSION` goes 2 → 3, and `onUpgrade`'s new
+`oldVersion < 3` branch re-parses every transaction that has its original `rawText`
+stored (SMS **and** notification-sourced alike — both go through the same regex) and
+overwrites `amount` wherever the corrected parse differs from what's stored; sign
+(debit/credit) was never affected, only magnitude, so nothing else about the row
+changes. Runs automatically the next time the app opens after this build installs — no
+Settings button to remember to press. Idempotent and safe to run more than once (a
+correctly-parsed row's re-parse matches what's already stored, so it's skipped).
+
+As with the framework migration before it, this native schema/data migration is
+unverified by a real device run — this sandbox still can't do a real Android compile —
+checked carefully by hand and cross-checked against the actual regex behavior in Python
+(equivalent backtracking semantics to Java/Kotlin's regex engine for this pattern) rather
+than assumed correct.

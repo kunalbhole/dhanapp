@@ -21,8 +21,13 @@ data class ParsedTransaction(
  */
 object TransactionParser {
 
+    // First alternative requires at least one comma group (`+`, not `*`) so it only
+    // matches genuinely comma-formatted numbers ("5,000", "1,00,000"). With `*` it could
+    // match zero comma groups and "succeed" on just the first 1-3 digits of a comma-less
+    // number (e.g. "500" out of "5000"), which won since alternation never backtracks
+    // into the second branch once the first "succeeds" — silently truncating amounts.
     private val amountRegex = Regex(
-        """(?:rs\.?|inr|₹)\s?([0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)""",
+        """(?:rs\.?|inr|₹)\s?([0-9]{1,3}(?:,[0-9]{2,3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)""",
         RegexOption.IGNORE_CASE,
     )
 

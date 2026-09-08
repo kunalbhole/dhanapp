@@ -157,6 +157,36 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
             )
             db.execSQL("DROP TABLE budgets_old")
         }
+        if (oldVersion < 3) {
+            // Data-integrity fix: TransactionParser's amount regex used to silently truncate
+            // comma-less amounts of 4+ digits by one digit (e.g. an SMS for ₹5,000 was
+            // captured and stored as ₹500) — see the `*` -> `+` fix on its comma-group.
+            // Every transaction that already has its original SMS/notification text stored
+            // gets re-parsed with the corrected regex and its amount overwritten wherever it
+            // now differs; sign (debit/credit) was never affected, only magnitude, so nothing
+            // else about the row needs to change.
+            val cursor = db.rawQuery(
+                "SELECT id, amount, sourceApp, rawText FROM transactions WHERE rawText IS NOT NULL",
+                null,
+            )
+            cursor.use {
+                val idIdx = it.getColumnIndexOrThrow("id")
+                val amountIdx = it.getColumnIndexOrThrow("amount")
+                val sourceAppIdx = it.getColumnIndexOrThrow("sourceApp")
+                val rawTextIdx = it.getColumnIndexOrThrow("rawText")
+                while (it.moveToNext()) {
+                    val rawText = it.getString(rawTextIdx) ?: continue
+                    val sourceApp = it.getString(sourceAppIdx)
+                    val storedAmount = it.getDouble(amountIdx)
+                    val parsed = TransactionParser.parse(rawText, sourceApp) ?: continue
+                    if (kotlin.math.abs(parsed.amountRupees - storedAmount) < 0.005) continue
+                    db.execSQL(
+                        "UPDATE transactions SET amount = ? WHERE id = ?",
+                        arrayOf(parsed.amountRupees.toString(), it.getLong(idIdx).toString()),
+                    )
+                }
+            }
+        }
     }
 
     fun insertTransaction(merchant: String, note: String?, amount: Double, category: String, timestampMillis: Long, source: String, sourceApp: String?, rawText: String?, accountHint: String?): Long {
@@ -581,7 +611,7 @@ class DhanDb private constructor(context: Context) : SQLiteOpenHelper(context.ap
 
     companion object {
         private const val DB_NAME = "dhan.db"
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
 
         @Volatile private var instance: DhanDb? = null
 
