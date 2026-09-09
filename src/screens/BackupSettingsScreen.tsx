@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { DhanText as Text } from '../components/DhanText';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { type } from '../theme/type';

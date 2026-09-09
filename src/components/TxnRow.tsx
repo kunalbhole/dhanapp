@@ -1,5 +1,6 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { DhanText as Text } from './DhanText';
 import { colors, categoryFromKey } from '../theme/colors';
 import { formatINR } from '../utils/format';
 import { CategoryIcon } from './CategoryIcon';

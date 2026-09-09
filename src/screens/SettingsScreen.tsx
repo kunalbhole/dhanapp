@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Switch, View } from 'react-native';
+import { DhanText as Text } from '../components/DhanText';
 import { useFocusEffect, useNavigation, CommonActions } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
@@ -8,6 +9,7 @@ import { db, CaptureEvent } from '../native/DhanDb';
 import { permissions } from '../native/DhanPermissions';
 import { userPrefs } from '../native/UserPrefs';
 import { entitlement, EntitlementStatus } from '../native/Entitlement';
+import { appInfo, AppVersionInfo } from '../native/AppInfo';
 import { DhanCard } from '../components/Card';
 import { DhanButton } from '../components/Button';
 import { dateLabel, timeLabel, dayGroupLabel } from '../utils/format';
@@ -22,7 +24,9 @@ export function SettingsScreen() {
   const [notifGranted, setNotifGranted] = useState(false);
   const [events, setEvents] = useState<CaptureEvent[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [relabeling, setRelabeling] = useState(false);
   const [plusStatus, setPlusStatus] = useState<EntitlementStatus | null>(null);
+  const [version, setVersion] = useState<AppVersionInfo | null>(null);
 
   const load = useCallback(() => {
     userPrefs.getUserName().then((n) => setName(n ?? ''));
@@ -30,6 +34,7 @@ export function SettingsScreen() {
     permissions.isNotificationListenerEnabled().then(setNotifGranted);
     db.getCaptureEvents().then(setEvents);
     entitlement.getStatus().then(setPlusStatus);
+    appInfo.getAppVersion().then(setVersion);
   }, []);
 
   const toggleSimulatedPlus = async (next: boolean) => {
@@ -57,6 +62,22 @@ export function SettingsScreen() {
       load();
     } finally {
       setScanning(false);
+    }
+  };
+
+  const relabelTransactions = async () => {
+    setRelabeling(true);
+    try {
+      const updated = await db.relabelSmsTransactions();
+      Alert.alert(
+        'Clean-up complete',
+        updated > 0
+          ? `Updated ${updated} transaction${updated === 1 ? '' : 's'} with better names.`
+          : 'Every transaction already has its best available name.',
+      );
+      load();
+    } finally {
+      setRelabeling(false);
     }
   };
 
@@ -107,6 +128,13 @@ export function SettingsScreen() {
             <DhanButton text="Scan now" size="sm" variant="secondary" loading={scanning} onPress={scanSmsHistory} />
           </View>
         )}
+        <View style={[styles.row, { marginTop: 14 }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.rowLabel}>Transaction labels</Text>
+            <Text style={styles.rowValue}>Clean up any old rows still showing a raw SMS sender ID as the title</Text>
+          </View>
+          <DhanButton text="Clean up" size="sm" variant="secondary" loading={relabeling} onPress={relabelTransactions} />
+        </View>
       </DhanCard>
 
       <Text style={styles.sectionLabel}>DHAN PLUS</Text>
@@ -154,6 +182,12 @@ export function SettingsScreen() {
       </DhanCard>
 
       <DhanButton text="Sign out" variant="destructive" full onPress={signOut} />
+
+      {version && (
+        <Text style={styles.version}>
+          Dhan v{version.versionName} (build {version.versionCode})
+        </Text>
+      )}
     </ScrollView>
   );
 }
@@ -185,4 +219,5 @@ const styles = StyleSheet.create({
   divider: { borderBottomWidth: 1, borderBottomColor: colors.borderSubtle },
   eventTitle: { fontSize: 13, fontWeight: '600', color: colors.fg1 },
   eventTime: { fontSize: 11, color: colors.fg3, marginTop: 2 },
+  version: { fontSize: 11, color: colors.fg3, textAlign: 'center', marginTop: 20 },
 });

@@ -9,14 +9,18 @@ import com.dhan.app.db.DhanDb
  *  by both SmsReceiver and TxnNotificationListenerService. Runs entirely native-side so
  *  it works whether or not the JS runtime/app is currently open. */
 object CaptureIngest {
-    /** Returns true if the message matched and a transaction was created. */
+    /**
+     * Returns true if the message matched and a *new* transaction was created — false both
+     * for a non-match and for a duplicate that [DhanDb.insertCapturedTransaction] silently
+     * skipped, so callers like [scanHistoricalSms] report how many transactions are
+     * actually new rather than re-claiming the same count on every re-run.
+     */
     fun process(context: Context, text: String, source: String, sourceApp: String?, timestampMillis: Long): Boolean {
         val db = DhanDb.get(context)
         val parsed = TransactionParser.parse(text, sourceApp)
         val createdId = parsed?.let {
-            db.insertTransaction(
+            db.insertCapturedTransaction(
                 merchant = it.merchant,
-                note = null,
                 amount = it.amountRupees,
                 category = it.category,
                 timestampMillis = timestampMillis,
@@ -34,7 +38,7 @@ object CaptureIngest {
             matched = parsed != null,
             createdTxnId = createdId,
         )
-        return parsed != null
+        return createdId != null
     }
 
     /**

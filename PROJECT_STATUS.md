@@ -443,6 +443,84 @@ elsewhere (none found — this was the only occurrence). Committed and pushed st
 verified by re-reading against the actual reported compiler errors, not by a local
 recompile — the next EAS build is the real confirmation.
 
+## Session update — design-system fidelity fixes (fonts, icons, SMS titles)
+
+The app was functionally working but visually diverging from the design system in three
+concrete ways. All three are fixed and pushed to `main` (`6019f7d`).
+
+**1. Poppins font, actually linked this time.** The earlier "no custom font" decision
+(see the superseded note below) is reversed — Poppins Regular/Medium/SemiBold/Bold are
+real `.ttf` files, sourced from `@expo-google-fonts/poppins` (same OFL-licensed Google
+Fonts binaries, just repackaged), in `src/assets/fonts/`. `react-native.config.js` points
+`assets` at that folder, and **`npx react-native-asset` did the actual native linking** —
+this is a pure Node/filesystem tool (no Gradle/Xcode compile involved), so unlike
+everything else in this project, it could run for real in this sandbox and be verified
+directly rather than written blind:
+  - Android: the four `.ttf` files are copied into `android/app/src/main/assets/fonts/` —
+    confirmed present. That's the entire Android requirement; nothing else needed.
+  - iOS: `Info.plist`'s `UIAppFonts` array and `DhanRN.xcodeproj/project.pbxproj`'s file
+    references/build phase were updated by `react-native-asset`'s proper Xcode-project
+    parser (not hand-edited text). Structurally consistent on inspection, but — like every
+    other native change in this project — **not build-verified**, since this sandbox has
+    no Xcode/macOS toolchain at all (a stricter version of the usual "no Google Maven"
+    limitation). iOS also isn't the active build target (`eas.json`'s profile is
+    Android-only), so this is a bonus, not the priority.
+  - `src/components/DhanText.tsx` is a new drop-in replacement for RN's `Text` that reads
+    whatever `fontWeight` a style already sets (400/500/600/700) and maps it onto the
+    matching Poppins file, dropping `fontWeight` itself (mixing it with a static per-weight
+    font file makes Android synthesize an ugly second bold on top of an already-bold font).
+    Every screen and component now imports `{ DhanText as Text }` instead of RN's `Text` —
+    since the wrapper derives everything from styles that already existed, this needed
+    **zero per-style edits** app-wide, just an import swap in 14 files.
+  - `src/theme/type.ts`'s `h1` — the role every screen title (Budget/Transactions/Bills/
+    More/Welcome) actually uses — is now 20px/Poppins Medium, matching the locked
+    "page headings 20px Poppins Medium" spec exactly (it was 24px Bold before). `h2`
+    (Home's greeting, the merchant name on transaction detail — a different role) is
+    unchanged.
+  - **This needs a fresh native build, not just a JS bundle push.** Font files living in
+    `android/app/src/main/assets/` and referenced in the iOS Xcode project are packaged
+    into the APK/IPA at native-build time — an OTA JS-only update (if this project had one)
+    would not pick them up. The next EAS build will include them automatically since
+    they're committed to the repo; no extra EAS config needed.
+
+**2. Real Phosphor icons, not emoji.** Same "no icon library" decision reversed, but via
+`phosphor-react-native`, which renders each icon as **SVG** (`react-native-svg` peer dep)
+rather than a custom icon font — so this genuinely doesn't carry the font-asset-linking
+risk the original decision was worried about; autolinking handles `react-native-svg`'s
+native module the same way it already handles every other native dependency here, no
+manual asset step required. Verified the exact icon names against the installed
+package's source before wiring anything (`HouseIcon`, `ForkKnifeIcon`, `BankIcon`, etc. —
+the `*Icon`-suffixed names, not the deprecated bare ones). Tab bar icons use `weight="regular"`
+normally and `weight="fill"` on the focused tab, per spec. Category icons replace the
+emoji circle glyphs; `'other'` specifically gets a Bank icon rather than a generic mark,
+since that's where most unclassifiable bank/UPI SMS transactions land — this is also what
+fixes the "generic dots/arrow" complaint, since `⋯` and `↓` were exactly the emoji glyphs
+for `other`/`income` before.
+
+**3. SMS transaction titles no longer show the raw sender ID.** `TransactionParser.kt`'s
+merchant fallback chain was `extractMerchant(...) ?: sourceApp ?: "Transaction"` — when no
+payee/merchant could be extracted from the message body, it fell straight through to the
+raw SMS sender header (e.g. `"AX-AXISBK-S"`, `"JK-JIOPAY-S"`) with no cleanup at all. Added
+`humanizeSender()`: strips the DLT operator-prefix/service-suffix pattern
+(`XX-CODE-S` → `CODE`), looks the code up in a small known-bank/UPI-service map (`AXISBK`
+→ "Axis Bank", `JIOPAY` → "JioPay", etc.), and falls back to title-casing the stripped
+code for anything not in the map — never the raw header. Notification-derived `sourceApp`
+values (already human names like "Google Pay") don't match the DLT pattern and pass
+through unchanged. **This only affects newly-captured messages** — it's a parser change,
+not a data migration, so transactions already sitting in the database with a bad title
+from before this fix aren't automatically relabeled. Added `DhanDb.relabelSmsTransactions()`
+to close that gap: re-runs the fixed parser against each existing SMS transaction's
+already-stored `rawText`, updates `merchant`/`category` in place wherever the result
+differs, touches nothing else, and is safe to run more than once. Exposed as a
+"Clean up" button next to "Scan now" in Settings → Capture — flagged here since it's a
+capability beyond the literal ask, added because fixing the parser alone wouldn't have
+actually fixed what the user was looking at on their test device.
+
+All three fixes verified with `npx tsc --noEmit` and `eslint` (clean) both in the working
+source and, separately, in the actual git-tracked clone after a fresh `npm install` —
+the Kotlin/native side is unverified by a real compile, as always, checked carefully by
+hand and cross-referenced against the installed packages' actual source instead.
+
 ## Immediate next step — running the EAS build (user's machine)
 
 ```
@@ -457,3 +535,249 @@ No branch checkout needed anymore — `main` is the default branch and is the RN
 `extra.eas.projectId` is set yet) — accept the default. When it finishes, it prints an
 APK download link (also visible at expo.dev under the project's Builds tab). Download
 that APK to a phone and install it (enable "install from unknown sources" if prompted).
+This build is the one that will actually carry the new Poppins/Phosphor assets — a plain
+JS reload will not.
+
+## Session update — Budget page rebuilt around frameworks and multiple budgets
+
+The previous Budget page (a single flat "Total budget" field plus generic category chips,
+built two sessions ago) didn't match the actual locked spec and has been replaced.
+**No visual reference was attached to this request** — per the standing process from the
+Claude Design redesign-brief session, implementation normally waits for a screenshot/share
+link per cluster. Given how precise this brief was about structure and behavior (accordion
+vs. tabs, Edit-flow-only framework switching, inheritance rules) rather than pixel details,
+I proceeded from the text spec directly rather than blocking — but exact spacing/copy here
+should be treated as provisional until a real Claude Design reference for this screen shows
+up, same caveat as the entitlement/backup work before it.
+
+**Data model — new, with a real migration.** `budgets` was a flat (category, monthKey) →
+amount table with no concept of more than one budget existing. `DhanDb`'s `DB_VERSION`
+goes 1 → 2:
+- New `budget_defs` table: `id, name, type (PERSONAL|PROJECT), frameworkKey,
+  customFrameworkJson`. A "Personal" row is seeded as id 1 on every fresh install and,
+  for existing installs, by the upgrade migration — Personal is always id 1, a convention
+  several other places (onboarding's budget-seeding, backup import) rely on.
+- `budgets` gains a `budgetDefId` column and its unique constraint becomes
+  `(budgetDefId, category, monthKey)` instead of just `(category, monthKey)`, so the same
+  category can have independent caps under different budgets.
+- The upgrade path (`onUpgrade`, not just `onCreate`) renames the old table, recreates it
+  with the new shape, copies every existing row across onto the new Personal budget
+  (including the `__total__` sentinel row the total-budget field already used), and drops
+  the old table. **This is the first real schema migration this project has needed** —
+  worth deliberately testing against a device with real existing budget data before
+  trusting it, since this sandbox still can't run a real Android build to exercise it.
+- Backup/restore (`exportAllJson`/`importAllJson`) now includes `budgetDefs`, with the
+  same "Personal is always id 1, remap everything else" logic used for friends/debts.
+
+**Frameworks (`src/data/frameworks.ts`)** — 50/30/20 is the default. **The "five
+alternative frameworks" aren't named anywhere in the design brief** (neither this message
+nor the earlier full redesign brief), so this is a flagged assumption, not a confirmed
+spec match: 70/20/10, 80/20 (Pay Yourself First), the 60% Solution, Envelope System, and
+Zero-Based Budgeting. Each framework is a set of named buckets with a percentage
+(summing to 100) and the spending categories that roll into it — a bucket with no
+categories (e.g. "Savings") represents money set aside rather than spent, and its amount
+is shown as `total × percent` with nothing further to break down. Envelope System and
+Zero-Based both use one bucket per spending category as a structural stand-in for
+"no fixed split" — this is a simplification (see below).
+
+**BudgetScreen.tsx** — "Your budgets": Personal first, then any Project budgets, as
+expandable accordion cards (decided explicitly over tabs or a dropdown). The whole card
+is the tap target, no chevron. A 3-dot menu (⋯, via `Alert.alert`'s button list rather
+than a new popover component) offers Edit always, Delete only for Project budgets — never
+for Personal. Expanding a card shows a read-only framework breakdown: each bucket's
+derived amount, and for spending buckets, per-category rows underneath with the same
+distinct-per-category bar colors the old page had (not a single flat tone) — nothing here
+is editable inline; that's the whole point of moving editing into its own screen.
+
+**EditBudgetScreen.tsx (new)** — the only place "Change framework" exists, per spec.
+- Total budget field: changing it **auto-scales every existing category allocation
+  proportionally** (new/old ratio applied to each). The brief mentioned this as one of
+  two options ("auto-scale... or manual rebalance") — only auto-scale is implemented;
+  a manual-rebalance mode is not a separate toggle, flagged as a scope simplification.
+- Framework row shows the current framework with a "Change" action; picking a different
+  one confirms first ("...will reset your category allocations to the new framework's
+  defaults... total stays the same"), then clears category rows and reseeds them from the
+  new framework's buckets × the existing total.
+- Per-category amounts are editable inline, grouped under their bucket, with a single
+  "Save allocations" action.
+
+**CreateBudgetScreen.tsx (new)** — name, framework (all 6 + Custom), and a **required**
+total budget amount — required specifically so "pre-filled default categories per
+framework, never starts empty" is actually guaranteed rather than aspirational. Calls the
+exact same `createBudgetDef`/allocation-seeding path regardless of type, so Project
+budgets inherit Personal's framework structure by construction, not by a parallel code
+path that could drift from it.
+
+**CustomFrameworkBuilderScreen.tsx (new)** — reachable from both Create and Edit's
+framework picker. **Its UX isn't specified anywhere in either brief**, flagged per your
+own instruction to flag ambiguity here specifically: this is a functional first pass —
+add/rename/remove named buckets, a percent per bucket validated to sum to 100, categories
+assigned via toggle chips — not a considered design. Most likely piece to need real
+revision once an actual visual reference for it exists.
+
+**Not done in this pass, flagged rather than silently skipped**: month-picker/calendar
+modal for switching months (Budget still only ever shows the current month, same as
+before); an icon/emoji picker at budget-creation time (mentioned in the original fuller
+redesign brief, not repeated in this request, so left out rather than assumed back in).
+
+Verified with `npx tsc --noEmit` and `eslint` — clean — in both the working source and,
+separately, the actual git-tracked clone after a fresh `npm install`.
+
+## Session update — data-integrity fix: comma-less amounts were being truncated
+
+**Bug.** `TransactionParser.kt`'s `amountRegex` had two alternatives; the first was
+`[0-9]{1,3}(?:,[0-9]{2,3})*(?:\.[0-9]{1,2})?` — a `*` (zero-or-more) on the comma-group.
+For a comma-less amount like `"5000"`, `[0-9]{1,3}` greedily grabs the first 3 digits
+(`"500"`), the comma-group matches zero times (no comma follows), and the alternative
+"succeeds" on just `"500"`. Regex alternation doesn't backtrack into the second
+alternative once the first has matched, so the full digit run was never reached — **any
+comma-less amount of 4+ digits was silently truncated by one digit** (₹5,000 captured as
+₹500, ₹12,340 as ₹123, etc.). Comma-formatted amounts (`"5,000"`, `"1,00,000"`) were
+never affected, since the comma-group had something to actually match.
+
+**Fix.** Changed that `*` to `+`, so the first alternative only succeeds when at least one
+comma group is present — genuinely comma-formatted numbers only. A comma-less number now
+fails the first alternative entirely and falls through to the second
+(`[0-9]+(?:\.[0-9]{1,2})?`), which matches its full length. Verified against
+`"Rs.5000"` → `5000`, `"Rs.5,000"` → `5,000`, `"Rs.500"` → `500`, `"Rs.1,00,000"` →
+`1,00,000`.
+
+**This is a data fix, not just a forward fix.** Every device that had already captured a
+comma-less 4+ digit transaction (via SMS or notification) has a wrong amount sitting in
+`transactions.amount` right now — the parser fix alone doesn't touch existing rows.
+Unlike the earlier sender-ID relabel fix (`relabelSmsTransactions()`, a manual "Clean up"
+button the user has to know to tap), a silently wrong amount in a finance app isn't
+something to leave opt-in. `DhanDb.DB_VERSION` goes 2 → 3, and `onUpgrade`'s new
+`oldVersion < 3` branch re-parses every transaction that has its original `rawText`
+stored (SMS **and** notification-sourced alike — both go through the same regex) and
+overwrites `amount` wherever the corrected parse differs from what's stored; sign
+(debit/credit) was never affected, only magnitude, so nothing else about the row
+changes. Runs automatically the next time the app opens after this build installs — no
+Settings button to remember to press. Idempotent and safe to run more than once (a
+correctly-parsed row's re-parse matches what's already stored, so it's skipped).
+
+As with the framework migration before it, this native schema/data migration is
+unverified by a real device run — this sandbox still can't do a real Android compile —
+checked carefully by hand and cross-checked against the actual regex behavior in Python
+(equivalent backtracking semantics to Java/Kotlin's regex engine for this pattern) rather
+than assumed correct.
+
+## Session update — data-integrity bug #2: no dedup, duplicate transactions
+
+**Bug.** The `transactions` table had no deduplication mechanism at all — any
+re-processing of the same underlying event silently inserted a second row with the same
+amount/merchant/timestamp. Concretely: re-running the Settings "Scan now" historical SMS
+scan, reinstalling the app (which replays SMS history during onboarding), or SMS capture
+and notification capture both catching the *same* real-world bank event.
+
+**Point 4 findings — SMS + notification capture genuinely can double-catch the same
+event.** Checked `TxnNotificationListenerService.TRACKED_PACKAGES` against the banks
+`TransactionParser` recognizes: several tracked notification packages
+(`com.axis.mobile`/Axis Bank, `com.csam.icici.bank.imobile`/ICICI, `com.snapwork.hdfc`/
+HDFC, the Kotak/SBI/PNB/BOB/Union Bank apps) are the exact same banks whose SMS debit/
+credit alerts are parsed — a user with both SMS read access and one of these banking
+apps' notification access granted can get both an SMS and a push notification for one
+real transaction. But their captured text is **not** the same string: SMS `sourceApp` is
+the raw DLT sender header (e.g. `"AX-AXISBK-S"`) while notification `sourceApp` is the
+human app name from `TRACKED_PACKAGES` (e.g. `"Axis Bank"`); SMS `rawText` is the full
+bank SMS body while notification `rawText` is title+text+bigText joined from a
+differently-worded push notification. `timestampMillis` also differs — SMS delivery time
+vs. notification post time can be a couple of minutes apart. So an **exact**-match dedup
+key (source|sourceApp|timestampMillis|rawText) provably cannot catch this case; confirms
+the brief's own point 4 concern, and a second, looser matching rule is needed alongside
+the exact one.
+
+**Fix — two layers, in `DhanDb.kt`:**
+1. **Exact-match layer.** `transactions` gains a `dedupKey TEXT` column (SHA-256 hex of
+   `source|sourceApp|timestampMillis|rawText`) plus
+   `CREATE UNIQUE INDEX idx_transactions_dedup ON transactions(dedupKey) WHERE dedupKey
+   IS NOT NULL` — a partial index, so manual entries and restored-backup rows (which never
+   set `dedupKey`) are naturally exempt rather than needing a sentinel value. Enforced at
+   the DB level via `insertWithOnConflict(..., CONFLICT_IGNORE)`, so it holds even across
+   a race (two inserts landing concurrently) that an application-level check-then-insert
+   can't fully close.
+2. **Fuzzy cross-source layer.** `findCrossSourceDuplicateId()` — before inserting, checks
+   for an existing row of the same amount, from a **different** source, within a 2-minute
+   window. Deliberately restricted to a different source so two genuinely distinct
+   same-source transactions of equal amount close together (e.g. two SMS-captured
+   payments a minute apart) are never affected — those are already fully protected by the
+   exact-key layer above.
+
+Both live in a new `DhanDb.insertCapturedTransaction()`, used only by `CaptureIngest`
+(the shared path behind `SmsReceiver` and `TxnNotificationListenerService`) — the existing
+`insertTransaction()` is untouched and still used by manual entry
+(`AddTransactionScreen`) and backup restore (`importAllJson`), which is exactly how those
+stay exempt from the dedup machinery per the brief's design. `CaptureIngest.process()`'s
+return value changed from "did this text match a transaction pattern" to "was a *new*
+transaction actually created" — needed so a re-run of the historical SMS scan reports how
+many transactions are genuinely new instead of re-claiming the same count every time,
+which would otherwise still read as duplicates to the user even after the DB itself
+stopped creating them.
+
+**Backfill.** `DB_VERSION` goes 3 → 4. `onUpgrade`'s new `oldVersion < 4` branch adds the
+column/index, then runs a one-time cleanup exactly as specified: groups existing rows by
+`(merchant, amount, timestampMillis, source)` and deletes all but the lowest `id` in each
+group. **Deliberately exact-match only** — a destructive `DELETE` run unattended on a
+finance app needs a false-positive-free match, and the fuzzy cross-source rule isn't one
+(two real distinct transactions of equal amount within a couple of minutes are
+possible, if unlikely). Consequence: **cross-source duplicate pairs that already exist in
+a user's database today are not auto-merged by this backfill** — only exact re-delivery
+duplicates (same source) are cleaned up automatically. Flagging this as a known gap rather
+than silently accepting the risk of a wrong auto-merge: a user who already has an SMS-row
+and a notification-row for the same real transaction will need to notice and delete one
+manually; going forward, no new cross-source duplicates will be created.
+
+Verified with `npx tsc --noEmit` and `eslint` — clean, no new errors (this is a native-only
+change; the JS/TS side is untouched). As with both migrations before it, unverified by a
+real device/compile — this sandbox still can't reach Google's Maven repo — checked by hand
+against the actual capture code paths (`SmsReceiver`, `TxnNotificationListenerService`,
+`CaptureIngest`) and the installed `TRACKED_PACKAGES` map rather than assumed.
+
+## Session update — visible build identifier in Settings
+
+**What was asked:** a small line at the bottom of Settings → More showing the app version
+and build number, sourced from app.json's `version` and Android's `versionCode`/
+`versionName`, plus incrementing `versionCode` by 1 per build going forward — purely so a
+test device's installed build can always be confirmed during debugging.
+
+**Deviated from the literal source ask, and why.** app.json's `expo.version` is
+`"0.0.1"`; `android/app/build.gradle`'s `versionName` is `"1.0"` — these two have already
+drifted out of sync with each other, nothing keeps them synced (this isn't an `expo
+prebuild`-generated `android/` — it's committed directly and hand-maintained), and
+`eas.json`'s `cli.appVersionSource: "local"` means **EAS Build reads versionName/
+versionCode straight from `build.gradle` for a native Android build — app.json's
+`version` field isn't even consulted.** Displaying app.json's version here would show a
+number that's disconnected from what's actually in the APK — exactly the kind of
+confusion this feature exists to prevent. So the version line instead reads the
+installed APK's own `PackageInfo` at runtime (`versionName` + `versionCode`, via a new
+`getAppVersion()` on the native side) — the one value that's *structurally guaranteed* to
+match what's actually installed, immune to either source file drifting again. Flagging
+the `app.json` vs. `build.gradle` version-string mismatch here since it's worth
+reconciling on its own, separately from this change — not fixed as part of it since
+neither string is obviously "the wrong one" without knowing your intent for it.
+
+**Implementation:**
+- `DhanPermissionsModule.kt` gains `getAppVersion()` (`@ReactMethod`) — reads
+  `packageManager.getPackageInfo(packageName, 0)`, returns `{versionName, versionCode}` as
+  a JSON string (same convention as `DhanDbModule`). Uses `longVersionCode` on API 28+,
+  falling back to the deprecated `versionCode` field below that. Lives on the existing
+  `DhanPermissions` module rather than a new one — it's the smallest existing
+  native-utility module, and a single getter didn't justify a new `NativeModule` +
+  `DhanPackage` registration on its own; flagged in a doc comment since the pairing is
+  otherwise an odd fit.
+- New `src/native/AppInfo.ts` — thin JS wrapper (`appInfo.getAppVersion()`), kept as its
+  own file/export name even though it's backed by the `DhanPermissions` native module, so
+  the JS-side name doesn't read as version info belonging under "permissions."
+- `SettingsScreen.tsx` — loads it alongside everything else `load()` already fetches, and
+  renders `Dhan v{versionName} (build {versionCode})` as a small centered caption at the
+  very bottom of the screen, below "Sign out."
+- `android/app/build.gradle`: `versionCode` 1 → 2 for this build. **Going forward, bump
+  `versionCode` by 1 in every future commit that will actually ship as an EAS build** — this
+  is now the only thing that makes each build distinguishable on a test device via the
+  Settings line above; noted here so it isn't forgotten in a future session.
+
+Verified with `npx tsc --noEmit` and `eslint` — clean, no new errors — in both the working
+source and the actual git-tracked clone. Native-side `getAppVersion()` is, as always,
+unverified by a real compile in this sandbox (no route to Google's Maven repo) — checked
+by hand against the `PackageInfo` API and the existing `DhanDbModule`/
+`DhanPermissionsModule` conventions rather than assumed correct.

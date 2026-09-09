@@ -54,19 +54,19 @@ export type CategoryKey =
   | 'food' | 'transport' | 'shopping' | 'bills' | 'ent' | 'health'
   | 'edu' | 'groceries' | 'rent' | 'travel' | 'income' | 'other';
 
-export const CATEGORIES: Record<CategoryKey, { name: string; color: string; glyph: string }> = {
-  food: { name: 'Food', color: colors.catFood, glyph: '🍔' },
-  transport: { name: 'Transport', color: colors.catTransport, glyph: '🚗' },
-  shopping: { name: 'Shopping', color: colors.catShopping, glyph: '🛍️' },
-  bills: { name: 'Bills', color: colors.catBills, glyph: '🧾' },
-  ent: { name: 'Entertainment', color: colors.catEnt, glyph: '🎬' },
-  health: { name: 'Health', color: colors.catHealth, glyph: '💊' },
-  edu: { name: 'Education', color: colors.catEducation, glyph: '🎓' },
-  groceries: { name: 'Groceries', color: colors.catGroceries, glyph: '🧺' },
-  rent: { name: 'Rent', color: colors.catRent, glyph: '🏠' },
-  travel: { name: 'Travel', color: colors.catTravel, glyph: '✈️' },
-  income: { name: 'Income', color: colors.income, glyph: '↓' },
-  other: { name: 'Other', color: colors.catOther, glyph: '⋯' },
+export const CATEGORIES: Record<CategoryKey, { name: string; color: string }> = {
+  food: { name: 'Food', color: colors.catFood },
+  transport: { name: 'Transport', color: colors.catTransport },
+  shopping: { name: 'Shopping', color: colors.catShopping },
+  bills: { name: 'Bills', color: colors.catBills },
+  ent: { name: 'Entertainment', color: colors.catEnt },
+  health: { name: 'Health', color: colors.catHealth },
+  edu: { name: 'Education', color: colors.catEducation },
+  groceries: { name: 'Groceries', color: colors.catGroceries },
+  rent: { name: 'Rent', color: colors.catRent },
+  travel: { name: 'Travel', color: colors.catTravel },
+  income: { name: 'Income', color: colors.income },
+  other: { name: 'Other', color: colors.catOther },
 };
 
 export function categoryFromKey(key: string | null | undefined): CategoryKey {

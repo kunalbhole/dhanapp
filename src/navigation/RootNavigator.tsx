@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, View } from 'react-native';
+import { CalendarCheckIcon, ChartPieIcon, GearIcon, HouseIcon, type Icon, ListBulletsIcon } from 'phosphor-react-native';
 import { colors } from '../theme/colors';
 import { userPrefs } from '../native/UserPrefs';
 
@@ -16,6 +17,9 @@ import { TxnDetailScreen } from '../screens/TxnDetailScreen';
 import { AddTransactionScreen } from '../screens/AddTransactionScreen';
 import { AddBillScreen } from '../screens/AddBillScreen';
 import { BackupSettingsScreen } from '../screens/BackupSettingsScreen';
+import { EditBudgetScreen } from '../screens/EditBudgetScreen';
+import { CreateBudgetScreen } from '../screens/CreateBudgetScreen';
+import { CustomFrameworkBuilderScreen } from '../screens/CustomFrameworkBuilderScreen';
 
 export type RootStackParamList = {
   Welcome: undefined;
@@ -24,6 +28,11 @@ export type RootStackParamList = {
   AddTransaction: { defaultIsIncome?: boolean } | undefined;
   AddBill: undefined;
   BackupSettings: undefined;
+  EditBudget: { budgetDefId: number };
+  CreateBudget: undefined;
+  CustomFrameworkBuilder:
+    | { mode: 'create'; pendingName: string; pendingTotal: number }
+    | { mode: 'edit'; budgetDefId: number; existingCustomJson: string | null; currentTotal: number };
 };
 
 export type MainTabParamList = {
@@ -37,12 +46,12 @@ export type MainTabParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
-const TAB_GLYPH: Record<keyof MainTabParamList, string> = {
-  Home: '🏠',
-  Transactions: '📜',
-  Budget: '📊',
-  Bills: '🧾',
-  Settings: '⚙️',
+const TAB_ICONS: Record<keyof MainTabParamList, Icon> = {
+  Home: HouseIcon,
+  Transactions: ListBulletsIcon,
+  Budget: ChartPieIcon,
+  Bills: CalendarCheckIcon,
+  Settings: GearIcon,
 };
 
 function MainTabs() {
@@ -52,7 +61,10 @@ function MainTabs() {
         headerShown: false,
         tabBarActiveTintColor: colors.navy,
         tabBarInactiveTintColor: colors.fg3,
-        tabBarIcon: () => <Text style={{ fontSize: 20 }}>{TAB_GLYPH[route.name as keyof MainTabParamList]}</Text>,
+        tabBarIcon: ({ focused, color, size }) => {
+          const IconComponent = TAB_ICONS[route.name as keyof MainTabParamList];
+          return <IconComponent color={color} size={size} weight={focused ? 'fill' : 'regular'} />;
+        },
       })}>
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Transactions" component={TransactionsScreen} options={{ title: 'Txns' }} />
@@ -93,6 +105,9 @@ export function RootNavigator() {
         <Stack.Screen name="AddTransaction" component={AddTransactionScreen} options={{ title: 'Add transaction', presentation: 'modal' }} />
         <Stack.Screen name="AddBill" component={AddBillScreen} options={{ title: 'Add bill', presentation: 'modal' }} />
         <Stack.Screen name="BackupSettings" component={BackupSettingsScreen} options={{ title: 'Backup' }} />
+        <Stack.Screen name="EditBudget" component={EditBudgetScreen} options={{ title: 'Edit budget' }} />
+        <Stack.Screen name="CreateBudget" component={CreateBudgetScreen} options={{ title: 'New budget', presentation: 'modal' }} />
+        <Stack.Screen name="CustomFrameworkBuilder" component={CustomFrameworkBuilderScreen} options={{ title: 'Custom framework' }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Alert, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, SafeAreaView, StyleSheet, View } from 'react-native';
+import { DhanText as Text } from '../components/DhanText';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
 import { type } from '../theme/type';
@@ -182,10 +183,11 @@ async function seedDefaultBudgets(): Promise<void> {
     spendByCategory.set(t.category, (spendByCategory.get(t.category) ?? 0) - t.amount);
   }
   const key = monthKey();
+  const PERSONAL_BUDGET_DEF_ID = 1; // always seeded as id 1, see DhanDb.onCreate/onUpgrade
   await Promise.all(
     Array.from(spendByCategory.entries())
       .filter(([, amount]) => amount > 0)
-      .map(([category, amount]) => db.setBudget(category, key, Math.round(amount))),
+      .map(([category, amount]) => db.setBudget(PERSONAL_BUDGET_DEF_ID, category, key, Math.round(amount))),
   );
 }
 

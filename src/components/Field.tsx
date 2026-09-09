@@ -1,5 +1,6 @@
 import React from 'react';
-import { KeyboardTypeOptions, StyleSheet, Text, TextInput, View } from 'react-native';
+import { KeyboardTypeOptions, StyleSheet, TextInput, View } from 'react-native';
+import { DhanText as Text } from './DhanText';
 import { colors } from '../theme/colors';
 import { radius } from '../theme/type';
 
@@ -49,5 +50,5 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   prefix: { color: colors.fg2, fontWeight: '600' },
-  input: { flex: 1, fontSize: 15, color: colors.fg1 },
+  input: { flex: 1, fontSize: 15, color: colors.fg1, fontFamily: 'Poppins-Regular' },
 });
